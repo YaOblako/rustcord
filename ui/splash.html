@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rustcord</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        body {
+            width: 100vw;
+            height: 100vh;
+            background-color: #121214;
+            color: #dbdee1;
+            font-family: 'gg sans', 'Noto Sans', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7);
+        }
+        .drag-region {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            -webkit-app-region: drag;
+        }
+        .container {
+            position: relative;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 20px;
+        }
+        .logo-wrap {
+            position: relative;
+            width: 88px;
+            height: 88px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .logo-img {
+            width: 84px;
+            height: auto;
+            max-height: 84px;
+            object-fit: contain;
+            /* Explicitly no glow or drop-shadow */
+            filter: none !important;
+            box-shadow: none !important;
+            animation: float-logo 2.6s infinite ease-in-out;
+        }
+        @keyframes float-logo {
+            0%, 100% {
+                transform: translateY(0px) scale(1);
+            }
+            50% {
+                transform: translateY(-4px) scale(1.02);
+            }
+        }
+        .app-name {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            color: #ffffff;
+            margin-bottom: 8px;
+            /* Explicitly no uppercase */
+            text-transform: none !important;
+        }
+        .status-text {
+            font-size: 13px;
+            font-weight: 500;
+            color: #949ba4;
+            min-height: 20px;
+            margin-bottom: 20px;
+            transition: opacity 0.25s ease;
+        }
+        .progress-bar-bg {
+            width: 170px;
+            height: 4px;
+            background-color: rgba(255, 255, 255, 0.08);
+            border-radius: 2px;
+            overflow: hidden;
+            position: relative;
+        }
+        .progress-bar-fill {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 40%;
+            /* Logo tone #F84800 */
+            background: linear-gradient(90deg, #F84800, #ff6a26);
+            border-radius: 2px;
+            animation: indeterminate 1.5s infinite ease-in-out;
+        }
+        @keyframes indeterminate {
+            0% {
+                left: -40%;
+                width: 30%;
+            }
+            50% {
+                left: 35%;
+                width: 50%;
+            }
+            100% {
+                left: 100%;
+                width: 30%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="drag-region"></div>
+    <div class="container">
+        <div class="logo-wrap">
+            <img src="logo-no-bg.png" class="logo-img" alt="Rustcord">
+        </div>
+        <div class="app-name">Rustcord</div>
+        <div class="status-text" id="status-text">Проверка обновлений...</div>
+        <div class="progress-bar-bg">
+            <div class="progress-bar-fill"></div>
+        </div>
+    </div>
+
+    <script>
+        const statusEl = document.getElementById('status-text');
+        const statuses = [
+            { t: 0, text: 'Проверка обновлений...' },
+            { t: 1400, text: 'Запуск Rustcord...' },
+            { t: 2800, text: 'Подключение к Discord...' }
+        ];
+        statuses.forEach(({ t, text }) => {
+            setTimeout(() => {
+                if (statusEl) {
+                    statusEl.style.opacity = '0';
+                    setTimeout(() => {
+                        statusEl.textContent = text;
+                        statusEl.style.opacity = '1';
+                    }, 200);
+                }
+            }, t);
+        });
+    </script>
+</body>
+</html>

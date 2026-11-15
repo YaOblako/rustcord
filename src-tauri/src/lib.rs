@@ -1,0 +1,431 @@
+mod equicord;
+
+use log::info;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, WindowEvent};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_updater::UpdaterExt;
+
+#[tauri::command]
+async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| e.to_string())?;
+    Ok(update.map(|u| u.version))
+}
+
+#[tauri::command]
+fn window_minimize(window: tauri::WebviewWindow) {
+    let _ = window.minimize();
+}
+
+#[tauri::command]
+fn window_toggle_maximize(window: tauri::WebviewWindow) {
+    if let Ok(is_maximized) = window.is_maximized() {
+        if is_maximized {
+            let _ = window.unmaximize();
+        } else {
+            let _ = window.maximize();
+        }
+    }
+}
+
+#[tauri::command]
+fn window_close(window: tauri::WebviewWindow) {
+    // Discord desktop behavior: closing window minimizes to system tray
+    let _ = window.hide();
+}
+
+#[tauri::command]
+fn window_start_dragging(window: tauri::WebviewWindow) {
+    let _ = window.start_dragging();
+}
+
+#[tauri::command]
+fn window_is_maximized(window: tauri::WebviewWindow) -> bool {
+    window.is_maximized().unwrap_or(false)
+}
+
+#[tauri::command]
+fn open_devtools(window: tauri::WebviewWindow) {
+    window.open_devtools();
+}
+
+#[tauri::command]
+fn app_ready(app: tauri::AppHandle) {
+    info!("[Rustcord] App reported READY. Dismissing splashscreen and revealing main window...");
+    if let Some(splash) = app.get_webview_window("splashscreen") {
+        let _ = splash.close();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.unminimize();
+        let _ = main.set_focus();
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct NativeFetchRequest {
+    pub url: String,
+    pub method: Option<String>,
+    pub headers: Option<std::collections::HashMap<String, String>>,
+    pub body: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct NativeFetchResponse {
+    pub status: u16,
+    pub status_text: String,
+    pub headers: std::collections::HashMap<String, String>,
+    pub body: String,
+}
+
+#[tauri::command]
+fn native_fetch(request: NativeFetchRequest) -> Result<NativeFetchResponse, String> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let method = match request.method.as_deref().unwrap_or("GET").to_uppercase().as_str() {
+        "POST" => reqwest::Method::POST,
+        "PUT" => reqwest::Method::PUT,
+        "DELETE" => reqwest::Method::DELETE,
+        "PATCH" => reqwest::Method::PATCH,
+        "HEAD" => reqwest::Method::HEAD,
+        _ => reqwest::Method::GET,
+    };
+
+    let mut req_builder = client.request(method, &request.url);
+
+    if let Some(headers) = request.headers {
+        for (k, v) in headers {
+            if let (Ok(name), Ok(val)) = (
+                reqwest::header::HeaderName::from_bytes(k.as_bytes()),
+                reqwest::header::HeaderValue::from_str(&v),
+            ) {
+                if name != reqwest::header::HOST && name != reqwest::header::CONTENT_LENGTH {
+                    req_builder = req_builder.header(name, val);
+                }
+            }
+        }
+    }
+
+    if let Some(body) = request.body {
+        req_builder = req_builder.body(body);
+    }
+
+    let resp = req_builder.send().map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    let status_text = resp.status().canonical_reason().unwrap_or("OK").to_string();
+
+    let mut resp_headers = std::collections::HashMap::new();
+    for (k, v) in resp.headers() {
+        if let Ok(val) = v.to_str() {
+            resp_headers.insert(k.as_str().to_string(), val.to_string());
+        }
+    }
+
+    let body = resp.text().unwrap_or_default();
+
+    Ok(NativeFetchResponse {
+        status,
+        status_text,
+        headers: resp_headers,
+        body,
+    })
+}
+
+#[tauri::command]
+fn open_themes_folder() -> Result<(), String> {
+    let themes_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("com.rustcord.app")
+        .join("themes");
+    let _ = std::fs::create_dir_all(&themes_dir);
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("explorer.exe")
+            .arg(themes_dir.to_string_lossy().as_ref())
+            .spawn();
+    }
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct LocalThemeInfo {
+    pub name: String,
+    pub filename: String,
+    pub css: String,
+}
+
+#[tauri::command]
+fn get_local_themes() -> Result<Vec<LocalThemeInfo>, String> {
+    let themes_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("com.rustcord.app")
+        .join("themes");
+    let _ = std::fs::create_dir_all(&themes_dir);
+
+    let mut list = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&themes_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(ext) = path.extension() {
+                    if ext == "css" {
+                        let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        if let Ok(css) = std::fs::read_to_string(&path) {
+                            list.push(LocalThemeInfo {
+                                name: filename.replace(".theme.css", "").replace(".css", ""),
+                                filename,
+                                css,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(list)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        // 1. Single Instance Protection (Prevents multiple instances/windows from Windows Search/Start Menu)
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            info!("[Rustcord] Secondary process launch intercepted. Focusing primary instance.");
+            if let Some(splash) = app.get_webview_window("splashscreen") {
+                let _ = splash.close();
+            }
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.show();
+                let _ = main.unminimize();
+                let _ = main.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .invoke_handler(tauri::generate_handler![
+            check_for_updates,
+            window_minimize,
+            window_toggle_maximize,
+            window_close,
+            window_start_dragging,
+            window_is_maximized,
+            open_devtools,
+            app_ready,
+            native_fetch,
+            open_themes_folder,
+            get_local_themes
+        ])
+        .setup(|app| {
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
+
+            info!("[Rustcord] Initializing client backend...");
+
+            let window_icon = app.default_window_icon().cloned().expect("window icon required");
+
+            // 2. Prepare Equicord bundle & script injection
+            let (equicord_js, equicord_css) = equicord::load_equicord_bundle();
+            let init_script = equicord::build_initialization_script(&equicord_js, &equicord_css);
+
+            // 3. Create Vertical Splashscreen window (300x350, frameless, dark background)
+            let _splash = tauri::WebviewWindowBuilder::new(
+                app,
+                "splashscreen",
+                tauri::WebviewUrl::App("splash.html".into()),
+            )
+            .title("Rustcord")
+            .icon(window_icon.clone())?
+            .inner_size(300.0, 350.0)
+            .resizable(false)
+            .decorations(false)
+            .center()
+            .shadow(true)
+            .build()?;
+
+            info!("[Rustcord] Splashscreen window displayed (300x350).");
+
+            // 4. Create Main Discord Webview window (1280x800, min 940x600, frameless, initially hidden)
+            let _main_window = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::External("https://discord.com/app".parse().expect("valid Discord URL")),
+            )
+            .title("Rustcord")
+            .icon(window_icon.clone())?
+            .inner_size(1280.0, 800.0)
+            .min_inner_size(940.0, 600.0)
+            .resizable(true)
+            .decorations(false)
+            .center()
+            .shadow(true)
+            .visible(false)
+            .initialization_script(&init_script)
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .build()?;
+
+            info!("[Rustcord] Main webview window prepared for https://discord.com/app.");
+
+            // 5. Safety Transition Timer (Ensures main window opens even on slow network connections)
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(5000));
+                if let Some(splash) = app_handle.get_webview_window("splashscreen") {
+                    let _ = splash.close();
+                }
+                if let Some(main) = app_handle.get_webview_window("main") {
+                    if let Ok(is_visible) = main.is_visible() {
+                        if !is_visible {
+                            info!("[Rustcord] Transition timer elapsed. Revealing main window.");
+                            let _ = main.show();
+                            let _ = main.unminimize();
+                            let _ = main.set_focus();
+                        }
+                    }
+                }
+            });
+
+            // 6. System Tray Setup (Single persistent tray with debounce on mouse release)
+            let open_item = MenuItem::with_id(app, "open", "Открыть Rustcord", true, None::<&str>)?;
+            let mute_item = MenuItem::with_id(app, "toggle_mute", "Микрофон (Mute)", true, None::<&str>)?;
+            let deaf_item = MenuItem::with_id(app, "toggle_deafen", "Звук (Deafen)", true, None::<&str>)?;
+            let game_mode_item = MenuItem::with_id(app, "toggle_game_mode", "Игровой режим", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
+
+            let tray_menu = Menu::with_items(
+                app,
+                &[&open_item, &mute_item, &deaf_item, &game_mode_item, &quit_item],
+            )?;
+
+            let _tray = TrayIconBuilder::new()
+                .icon(window_icon)
+                .tooltip("Rustcord")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_menu_event(|app, event| {
+                    if let Some(window) = app.get_webview_window("main") {
+                        match event.id.as_ref() {
+                            "open" => {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                            "toggle_mute" => {
+                                let _ = window.eval("window.__RUSTCORD__ && window.__RUSTCORD__.toggleMute();");
+                            }
+                            "toggle_deafen" => {
+                                let _ = window.eval("window.__RUSTCORD__ && window.__RUSTCORD__.toggleDeafen();");
+                            }
+                            "toggle_game_mode" => {
+                                let _ = window.eval("window.__RUSTCORD__ && window.__RUSTCORD__.toggleGameMode();");
+                            }
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            _ => {}
+                        }
+                    }
+                })
+                .on_tray_icon_event(|tray, event| {
+                    // Only react on MouseButtonState::Up to avoid double-triggering
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            if let Ok(is_visible) = window.is_visible() {
+                                if is_visible {
+                                    let _ = window.hide();
+                                } else {
+                                    let _ = window.show();
+                                    let _ = window.unminimize();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                        }
+                    }
+                })
+                .build(app)?;
+
+            info!("[Rustcord] System tray registered.");
+
+            // 7. Global Hotkeys for In-Game Overlay Actions (PTT/Mute/Deafen/Game Mode)
+            app.handle().plugin(
+                tauri_plugin_global_shortcut::Builder::new()
+                    .with_handler(|app, shortcut, event| {
+                        if event.state() == ShortcutState::Pressed {
+                            if let Some(win) = app.get_webview_window("main") {
+                                if shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyM) {
+                                    let _ = win.eval("window.__RUSTCORD__ && window.__RUSTCORD__.toggleMute();");
+                                } else if shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyD) {
+                                    let _ = win.eval("window.__RUSTCORD__ && window.__RUSTCORD__.toggleDeafen();");
+                                } else if shortcut.matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyG) {
+                                    let _ = win.eval("window.__RUSTCORD__ && window.__RUSTCORD__.toggleGameMode();");
+                                }
+                            }
+                        }
+                    })
+                    .build(),
+            )?;
+
+            let mute_sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyM);
+            let deaf_sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyD);
+            let game_sc = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyG);
+
+            let _ = app.global_shortcut().register(mute_sc);
+            let _ = app.global_shortcut().register(deaf_sc);
+            let _ = app.global_shortcut().register(game_sc);
+
+            info!("[Rustcord] Global shortcuts registered (Ctrl+Shift+M, Ctrl+Shift+D, Ctrl+Shift+G).");
+
+            // 7. Auto-updater background check on launch
+            let updater_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(8));
+                tauri::async_runtime::block_on(async move {
+                    if let Ok(updater) = updater_handle.updater() {
+                        match updater.check().await {
+                            Ok(Some(update)) => {
+                                info!("[Rustcord Updater] New update available: {}", update.version);
+                                let _ = update.download_and_install(|_, _| {}, || {
+                                    info!("[Rustcord Updater] Update installed. Restart required.");
+                                }).await;
+                            }
+                            Ok(None) => {
+                                info!("[Rustcord Updater] Application is up to date.");
+                            }
+                            Err(e) => {
+                                info!("[Rustcord Updater] Update check: {}", e);
+                            }
+                        }
+                    }
+                });
+            });
+
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Minimize to system tray on window close button (X)
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    let _ = window.hide();
+                    api.prevent_close();
+                }
+            }
+        })
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

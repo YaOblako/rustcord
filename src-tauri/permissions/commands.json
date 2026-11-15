@@ -1,0 +1,29 @@
+{
+  "permission": [
+    {
+      "identifier": "allow-all-custom",
+      "description": "Allow all custom app commands",
+      "commands": {
+        "allow": [
+          "window_minimize",
+          "window_toggle_maximize",
+          "window_close",
+          "window_start_dragging",
+          "window_is_maximized",
+          "open_devtools",
+          "app_ready",
+          "native_fetch",
+          "open_themes_folder",
+          "get_local_themes",
+          "check_for_updates"
+        ]
+      }
+    }
+  ],
+  "default": {
+    "description": "Permissions for Rustcord custom commands",
+    "permissions": [
+      "allow-all-custom"
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+# Rust build artifacts
+target/
+**/target/
+**/*.rs.bk
+*.pdb
+
+# Tauri generated schemas
+gen/
+src-tauri/gen/
+
+# Signing keys (never commit private keys)
+*.key
+src-tauri/*.key
+!*.key.pub
+!src-tauri/*.key.pub
+
+# Logs & temp files
+*.log
+scratch/
+test_*.js
+
+# OS metadata
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
