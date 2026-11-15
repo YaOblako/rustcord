@@ -1,85 +1,91 @@
 # Rustcord
 
-Rustcord — легкий и оптимизированный для гейминга десктопный клиент Discord на базе Rust и Tauri v2, использующий системный WebView2 вместо тяжелого Electron.
+Rustcord is a lightweight, gaming-optimized desktop Discord client built with Rust and Tauri v2, using the native system WebView2 instead of Electron.
 
-Размер готового инсталлятора — всего ~3.9 МБ (в отличие от 150+ МБ у официального Electron-клиента), а потребление оперативной памяти существенно снижено.
+The setup installer size is only ~3.9 MB (compared to 150+ MB for the official Electron client), with significantly reduced RAM and CPU consumption.
 
 ---
 
-## Ключевые возможности
+## Key Features
 
-### 1. Минимальное потребление ресурсов и стабильный WebRTC
-- Работа на системном Microsoft Edge WebView2 (Blink/Chromium).
-- Флаги фоновой оптимизации:
+### 1. Minimal Resource Usage and Stable WebRTC
+- Built on Microsoft Edge WebView2 (Blink/Chromium), utilizing OS-shared runtimes.
+- Configured background flags:
   - `--disable-background-timer-throttling`
   - `--disable-backgrounding-occluded-windows`
   - `--disable-renderer-backgrounding`
   - `--enable-features=WebRTCPeerConnectionWithBlockIceRegathering`
-- Голосовое соединение (WebRTC) сохраняет стабильность при сворачивании в трей во время игр.
+- Voice communication (WebRTC) stays connected without stuttering or audio drops when minimized to the tray during demanding games.
 
-### 2. Встроенная поддержка мода Equicord
-- Автоматическая загрузка актуальных релизов `browser.js` и `browser.css` с официального репозитория Equicord в каталог профиля `%LOCALAPPDATA%\com.rustcord.app\equicord`.
-- Встроенные оффлайн-ресурсы для запуска без доступа к интернету.
-- Внедрение через `initialization_script` Tauri до загрузки бандлов Discord.
-- Поддержка облачной интеграции (Equicord Cloud и Vencord Cloud OAuth) через нативный HTTP-прокси без блокировок Content Security Policy.
-- Поддержка тем оформления: локальные темы из папки `%LOCALAPPDATA%\com.rustcord.app\themes\` и онлайн-темы по URL.
+### 2. Built-in Equicord Client Mod Support
+- Automatically retrieves the latest `browser.js` and `browser.css` from the official Equicord GitHub repository to `%LOCALAPPDATA%\com.rustcord.app\equicord`.
+- Bundled fallback assets ensure immediate launch even offline.
+- Injected via Tauri's `initialization_script` before Discord scripts load.
+- Full Cloud Integration support (Equicord Cloud and Vencord Cloud OAuth) via a native backend HTTP proxy, bypassing browser Content Security Policy (CSP) and CORS restrictions.
+- Comprehensive Themes support: load local `.theme.css` files from `%LOCALAPPDATA%\com.rustcord.app\themes\` or paste online theme URLs.
 
-### 3. Кастомный заголовок окна (Titlebar) и OLED-тема
-- Окно без системной рамки с сохранением системной тени.
-- Выделенная верхняя панель (26px) с логотипом Discord, областью перетаскивания окна и кнопками управления:
-  - Свернуть в панель задач
-  - Развернуть / Восстановить (двойной клик по шапке также переключает режим)
-  - Закрыть (сворачивание в системный трей)
-- Чистая OLED-тема (глубокий черный фон `#000000`, тонкая красно-оранжевая обводка окна `#F84800`).
+### 3. Native Titlebar and Pure OLED Dark Theme
+- Borderless window with native Windows drop shadow.
+- Dedicated 26px top titlebar positioned cleanly above Discord:
+  - Discord icon and wordmark on the left
+  - Draggable header area (double-click to maximize/restore)
+  - Dedicated window controls on the right: Minimize, Maximize / Restore, and Close (minimize to tray)
+- Pure OLED dark theme (`#000000` deep black background with a `#F84800` accent window border).
 
-### 4. Игровой режим (Game Mode)
-- Активируется через системный трей или глобальную комбинацию клавиш.
-- Отключает ресурсоемкие анимации, переходы и графические эффекты:
-  - Ускорение CSS Transitions и Keyframe Animations (`0.001ms`).
-  - Отключение эффекта `backdrop-filter` (размытия фона в модальных окнах).
-  - Отключение анимированных аватаров Nitro, декораций профилей и фоновых видео.
-  - Остановка автовоспроизведения тяжелых GIF и стикеров.
+### 4. Gaming Mode
+- Toggleable via system tray or a global keyboard shortcut.
+- Disables resource-intensive UI animations and rendering overhead:
+  - Accelerates CSS Transitions and Keyframe Animations to `0.001ms`.
+  - Removes heavy `backdrop-filter` blur effects from modals.
+  - Hides animated Nitro avatars, profile effects, and banner canvases/videos.
+  - Pauses autoplay for animated GIFs and stickers.
 
-### 5. Системный трей и глобальные горячие клавиши
-- Сворачивание в системный трей при закрытии окна.
-- Меню трея:
-  - Открыть Rustcord
-  - Микрофон (Mute)
-  - Звук (Deafen)
-  - Игровой режим
-  - Выход
-- Глобальные комбинации клавиш (работают поверх полноэкранных игр):
-  - `Ctrl + Shift + M` — Переключить микрофон
-  - `Ctrl + Shift + D` — Переключить звук
-  - `Ctrl + Shift + G` — Переключить игровой режим
-  - `F12` или `Ctrl + Shift + I` — Открыть инструменты разработчика (DevTools)
+### 5. System Tray and Global Hotkeys
+- Closing the window (X) minimizes the client to the system tray rather than killing the process.
+- System Tray Context Menu:
+  - Open Rustcord
+  - Mute Microphone
+  - Deafen Audio
+  - Toggle Game Mode
+  - Quit
+- Global shortcuts (functional over full-screen games without losing focus):
+  - `Ctrl + Shift + M` — Toggle Microphone (Mute / Unmute)
+  - `Ctrl + Shift + D` — Toggle Audio (Deafen / Undeafen)
+  - `Ctrl + Shift + G` — Toggle Game Mode
+  - `F12` or `Ctrl + Shift + I` — Open Developer Tools (DevTools)
 
-### 6. Автоматическое обновление (Auto-updater)
-- Встроенный механизм проверки обновлений на базе `tauri-plugin-updater`.
-- Автоматическая проверка новых релизов с GitHub Releases на старте приложения.
-- Цифровая подпись пакетов обновлений ключом minisign.
+### 6. Automated Updates (Auto-updater)
+- Powered by `tauri-plugin-updater` v2.
+- Automatically checks for new versions on GitHub Releases at application startup.
+- Cryptographically verified update packages signed with minisign keys.
 
 ---
 
-## Сборка из исходников
+## Building from Source
 
-### Требования
-- Rust 1.77+ (MSVC toolchain на Windows)
+### Prerequisites
+- Rust 1.77+ (MSVC toolchain on Windows)
 - Microsoft Visual Studio 2022 C++ Build Tools
-- Node.js (опционально)
+- Node.js (optional)
 
-### Команды
+### Build Commands
 
 ```bash
-# Переход в каталог проекта
+# Navigate to project directory
 cd rustcord
 
-# Проверка сборки
+# Check compilation
 cargo check --manifest-path src-tauri/Cargo.toml
 
-# Сборка установщика (NSIS)
+# Build release NSIS installer
 cargo tauri build
 ```
 
-Готовый установщик сохраняется по пути:
+The resulting installer is generated at:
 `src-tauri/target/release/bundle/nsis/Rustcord_1.0.0_x64-setup.exe`
+
+---
+
+## License
+
+MIT License. Discord is a trademark of Discord Inc. Rustcord is an independent open-source project and is not affiliated with or endorsed by Discord Inc.
