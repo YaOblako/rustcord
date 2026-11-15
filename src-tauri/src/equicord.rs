@@ -212,20 +212,15 @@ pub fn build_initialization_script(equicord_js: &str, equicord_css: &str) -> Str
         return _origFetch.apply(this, origArgs);
     };
 
-    // 4. Styles: Layout + Dedicated Top Titlebar (26px) + Dynamic Theme Integration
+    // 4. Styles: Discord Native Layout + Dedicated Top Titlebar (26px)
     const TITLEBAR_CSS = `
 /* ===== Base Window Layout ===== */
 html {
-    border: 1px solid #F84800 !important;
     box-sizing: border-box !important;
     height: 100% !important;
     overflow: hidden !important;
 }
-html.is-maximized {
-    border: none !important;
-}
 body {
-    color: #dbdee1;
     margin: 0 !important;
     padding: 0 !important;
     height: 100% !important;
@@ -245,34 +240,6 @@ body {
     overflow: hidden !important;
 }
 
-/* ===== OLED Base (Active only when no custom theme is loaded) ===== */
-html:not(.custom-theme-active),
-html:not(.custom-theme-active) body,
-html:not(.custom-theme-active) #app-mount,
-html:not(.custom-theme-active) .theme-dark {
-    --background-primary: #000000;
-    --background-secondary: #000000;
-    --background-secondary-alt: #050505;
-    --background-tertiary: #000000;
-    --background-accent: #0f0f0f;
-    --background-floating: #0a0a0a;
-    --background-nested-floating: #000000;
-    --background-mobile-primary: #000000;
-    --background-mobile-secondary: #000000;
-    --chat-background: #000000;
-    --chat-background-default: #000000;
-    --channeltextarea-background: #0d0d0d;
-    --bg-base-primary: #000000;
-    --bg-base-secondary: #000000;
-    --bg-base-tertiary: #000000;
-    --bg-surface-raised: #080808;
-    --bg-surface-overlay: #0c0c0c;
-    --bg-mod-faint: rgba(255,255,255,0.02);
-    --bg-mod-subtle: rgba(255,255,255,0.04);
-    --home-background: #000000;
-    background-color: #000000;
-}
-
 /* ===== Dedicated Discord Native Top Titlebar (26px) ===== */
 #rustcord-titlebar {
     position: fixed !important;
@@ -280,7 +247,7 @@ html:not(.custom-theme-active) .theme-dark {
     left: 0 !important;
     right: 0 !important;
     height: 26px !important;
-    background-color: var(--background-tertiary, #000000) !important;
+    background-color: var(--background-tertiary, var(--bg-base-tertiary, #1e1f22)) !important;
     z-index: 2147483647 !important;
     display: flex !important;
     align-items: center !important;
@@ -290,13 +257,13 @@ html:not(.custom-theme-active) .theme-dark {
     box-sizing: border-box !important;
     -webkit-app-region: drag !important;
     user-select: none !important;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06)) !important;
 }
 .rc-tb-left {
     display: flex !important;
     align-items: center !important;
     gap: 7px !important;
-    color: #949ba4 !important;
+    color: var(--header-secondary, #949ba4) !important;
     font-size: 12px !important;
     font-weight: 600 !important;
     letter-spacing: 0.2px !important;
@@ -307,10 +274,10 @@ html:not(.custom-theme-active) .theme-dark {
 .rc-tb-icon {
     width: 14px !important;
     height: 14px !important;
-    fill: #949ba4 !important;
+    fill: currentColor !important;
 }
 .rc-tb-title {
-    color: #949ba4 !important;
+    color: var(--header-secondary, #949ba4) !important;
 }
 .rc-tb-drag-area {
     flex: 1 !important;
@@ -327,7 +294,7 @@ html:not(.custom-theme-active) .theme-dark {
     background: transparent !important;
     border: none !important;
     outline: none !important;
-    color: #949ba4 !important;
+    color: var(--interactive-normal, #949ba4) !important;
     width: 38px !important;
     height: 26px !important;
     display: inline-flex !important;
@@ -340,8 +307,8 @@ html:not(.custom-theme-active) .theme-dark {
     -webkit-app-region: no-drag !important;
 }
 .rc-tb-btn:hover {
-    color: #ffffff !important;
-    background-color: rgba(255, 255, 255, 0.1) !important;
+    color: var(--interactive-hover, #ffffff) !important;
+    background-color: var(--background-modifier-hover, rgba(255, 255, 255, 0.08)) !important;
 }
 .rc-tb-btn.rc-close {
     width: 44px !important;
@@ -358,12 +325,6 @@ html:not(.custom-theme-active) .theme-dark {
 [class*="winButtons_"], [class*="winButton_"] {
     display: none !important;
 }
-
-/* Custom Scrollbars */
-::-webkit-scrollbar { width: 8px !important; height: 8px !important; }
-::-webkit-scrollbar-track { background: #000000 !important; }
-::-webkit-scrollbar-thumb { background: #202225 !important; border-radius: 4px !important; }
-::-webkit-scrollbar-thumb:hover { background: #2f3136 !important; }
     `;
 
     // 5. Mount Native Top Titlebar
@@ -395,9 +356,9 @@ html:not(.custom-theme-active) .theme-dark {
         if (!body) return;
 
         // Ensure CSS style tag is in head or documentElement
-        if (!document.getElementById('rustcord-native-titlebar-oled')) {
+        if (!document.getElementById('rustcord-native-titlebar-css')) {
             const s = document.createElement('style');
-            s.id = 'rustcord-native-titlebar-oled';
+            s.id = 'rustcord-native-titlebar-css';
             s.textContent = TITLEBAR_CSS;
             (document.head || document.documentElement).appendChild(s);
         }
