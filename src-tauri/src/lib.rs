@@ -194,6 +194,17 @@ fn get_local_themes() -> Result<Vec<LocalThemeInfo>, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Disable web security for WebView2 to allow theme loading, external fonts, and OAuth callbacks
+    #[cfg(target_os = "windows")]
+    {
+        let current_args = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
+        let new_args = format!(
+            "{} --disable-web-security --allow-running-insecure-content",
+            current_args
+        );
+        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", new_args.trim());
+    }
+
     tauri::Builder::default()
         // 1. Single Instance Protection (Prevents multiple instances/windows from Windows Search/Start Menu)
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {

@@ -212,13 +212,12 @@ pub fn build_initialization_script(equicord_js: &str, equicord_css: &str) -> Str
         return _origFetch.apply(this, origArgs);
     };
 
-    // 4. Styles: OLED Dark Theme + Dedicated Top Titlebar (26px)
+    // 4. Styles: Layout + Dedicated Top Titlebar (26px) + Dynamic Theme Integration
     const TITLEBAR_CSS = `
-/* ===== OLED Base ===== */
+/* ===== Base Window Layout ===== */
 html {
     border: 1px solid #F84800 !important;
     box-sizing: border-box !important;
-    background: #000000 !important;
     height: 100% !important;
     overflow: hidden !important;
 }
@@ -226,35 +225,11 @@ html.is-maximized {
     border: none !important;
 }
 body {
-    background: #000000 !important;
-    color: #dbdee1 !important;
+    color: #dbdee1;
     margin: 0 !important;
     padding: 0 !important;
     height: 100% !important;
     overflow: hidden !important;
-}
-html, body, #app-mount, .theme-dark {
-    --background-primary: #000000 !important;
-    --background-secondary: #000000 !important;
-    --background-secondary-alt: #050505 !important;
-    --background-tertiary: #000000 !important;
-    --background-accent: #0f0f0f !important;
-    --background-floating: #0a0a0a !important;
-    --background-nested-floating: #000000 !important;
-    --background-mobile-primary: #000000 !important;
-    --background-mobile-secondary: #000000 !important;
-    --chat-background: #000000 !important;
-    --chat-background-default: #000000 !important;
-    --channeltextarea-background: #0d0d0d !important;
-    --bg-base-primary: #000000 !important;
-    --bg-base-secondary: #000000 !important;
-    --bg-base-tertiary: #000000 !important;
-    --bg-surface-raised: #080808 !important;
-    --bg-surface-overlay: #0c0c0c !important;
-    --bg-mod-faint: rgba(255,255,255,0.02) !important;
-    --bg-mod-subtle: rgba(255,255,255,0.04) !important;
-    --home-background: #000000 !important;
-    background-color: #000000 !important;
 }
 
 /* ===== Discord App Container below 26px Top Titlebar ===== */
@@ -267,14 +242,35 @@ html, body, #app-mount, .theme-dark {
     width: 100% !important;
     height: calc(100% - 26px) !important;
     box-sizing: border-box !important;
-    background: #000000 !important;
     overflow: hidden !important;
 }
-[class*="appAsidePanelWrapper"],
-[class*="chat_"],[class*="sidebar_"],[class*="panels_"],
-[class*="container_"],[class*="chatContent_"],[class*="content_"],
-[class*="guilds_"] {
-    background-color: #000000 !important;
+
+/* ===== OLED Base (Active only when no custom theme is loaded) ===== */
+html:not(.custom-theme-active),
+html:not(.custom-theme-active) body,
+html:not(.custom-theme-active) #app-mount,
+html:not(.custom-theme-active) .theme-dark {
+    --background-primary: #000000;
+    --background-secondary: #000000;
+    --background-secondary-alt: #050505;
+    --background-tertiary: #000000;
+    --background-accent: #0f0f0f;
+    --background-floating: #0a0a0a;
+    --background-nested-floating: #000000;
+    --background-mobile-primary: #000000;
+    --background-mobile-secondary: #000000;
+    --chat-background: #000000;
+    --chat-background-default: #000000;
+    --channeltextarea-background: #0d0d0d;
+    --bg-base-primary: #000000;
+    --bg-base-secondary: #000000;
+    --bg-base-tertiary: #000000;
+    --bg-surface-raised: #080808;
+    --bg-surface-overlay: #0c0c0c;
+    --bg-mod-faint: rgba(255,255,255,0.02);
+    --bg-mod-subtle: rgba(255,255,255,0.04);
+    --home-background: #000000;
+    background-color: #000000;
 }
 
 /* ===== Dedicated Discord Native Top Titlebar (26px) ===== */
@@ -284,7 +280,7 @@ html, body, #app-mount, .theme-dark {
     left: 0 !important;
     right: 0 !important;
     height: 26px !important;
-    background-color: #000000 !important;
+    background-color: var(--background-tertiary, #000000) !important;
     z-index: 2147483647 !important;
     display: flex !important;
     align-items: center !important;
@@ -544,7 +540,7 @@ html, body, #app-mount, .theme-dark {
         console.error('[Rustcord] Equicord execution error:', err);
     }
 
-    // 11. Enhance VencordNative with Themes Folder & Local Themes integration
+    // 11. Complete Theme Management Engine (Local files, IndexedDB & Online Themes)
     const patchThemes = () => {
         if (window.VencordNative?.themes) {
             window.VencordNative.themes.openFolder = () => invoke('open_themes_folder');
@@ -562,7 +558,166 @@ html, body, #app-mount, .theme-dark {
     patchThemes();
     setInterval(patchThemes, 3000);
 
-    // 12. Gaming helpers & OLED toasts
+    const syncThemes = async () => {
+        try {
+            const settings = window.Vencord?.Settings;
+            const enabledThemes = settings?.enabledThemes || [];
+            const enabledLinks = settings?.enabledThemeLinks || [];
+            const hasThemes = (Array.isArray(enabledThemes) && enabledThemes.length > 0) ||
+                              (Array.isArray(enabledLinks) && enabledLinks.length > 0);
+
+            if (document.documentElement) {
+                document.documentElement.classList.toggle('custom-theme-active', hasThemes);
+            }
+
+            let st = document.getElementById('rustcord-active-theme-css');
+            if (!st) {
+                st = document.createElement('style');
+                st.id = 'rustcord-active-theme-css';
+                (document.head || document.documentElement).appendChild(st);
+            }
+
+            if (!hasThemes) {
+                if (st.textContent !== '') st.textContent = '';
+                return;
+            }
+
+            const cssParts = [];
+
+            // 1. Fetch CSS for local themes via VencordNative.themes.getThemeData
+            if (Array.isArray(enabledThemes)) {
+                for (const tName of enabledThemes) {
+                    try {
+                        if (window.VencordNative?.themes?.getThemeData) {
+                            const data = await window.VencordNative.themes.getThemeData(tName);
+                            if (data && typeof data === 'string' && data.length > 0) {
+                                cssParts.push('/* Local Theme: ' + tName + ' */\n' + data);
+                            }
+                        }
+                    } catch(e) {}
+                }
+            }
+
+            // Fallback / sync from local files in themes folder
+            try {
+                const localThemes = await invoke('get_local_themes');
+                if (Array.isArray(localThemes)) {
+                    for (const t of localThemes) {
+                        if (enabledThemes.includes(t.filename) || enabledThemes.includes(t.name)) {
+                            const alreadyAdded = cssParts.some(p => p.includes(t.filename));
+                            if (!alreadyAdded && t.css) {
+                                cssParts.push('/* Local File: ' + t.filename + ' */\n' + t.css);
+                            }
+                        }
+                    }
+                }
+            } catch(e) {}
+
+            // 2. Fetch CSS for online themes
+            if (Array.isArray(enabledLinks)) {
+                for (const link of enabledLinks) {
+                    try {
+                        const cleanLink = link.replace(/^@(light|dark)\s+/, '').trim();
+                        const resp = await fetch(cleanLink);
+                        if (resp.ok) {
+                            const text = await resp.text();
+                            cssParts.push('/* Online Theme: ' + cleanLink + ' */\n' + text);
+                        }
+                    } catch(e) {}
+                }
+            }
+
+            // 3. Inspect <style id="vencord-themes"> for any blob URLs
+            const vencordThemesTag = document.getElementById('vencord-themes');
+            if (vencordThemesTag && vencordThemesTag.textContent) {
+                const blobUrls = vencordThemesTag.textContent.match(/blob:https?:\/\/[^\s'")]+/g) || [];
+                for (const bUrl of blobUrls) {
+                    try {
+                        const bResp = await fetch(bUrl);
+                        if (bResp.ok) {
+                            const bText = await bResp.text();
+                            if (bText && !cssParts.some(p => p.includes(bText.slice(0, 50)))) {
+                                cssParts.push('/* Blob Theme */\n' + bText);
+                            }
+                        }
+                    } catch(e) {}
+                }
+            }
+
+            const combined = cssParts.join('\n\n');
+            if (st.textContent !== combined) {
+                st.textContent = combined;
+                console.log('[Rustcord] Theme engine active with ' + cssParts.length + ' theme(s).');
+            }
+        } catch(err) {
+            console.warn('[Rustcord] Theme sync error:', err);
+        }
+    };
+
+    setTimeout(syncThemes, 1000);
+    setTimeout(syncThemes, 2500);
+    setTimeout(syncThemes, 5000);
+    setInterval(syncThemes, 1500);
+
+    const hookThemeListeners = () => {
+        if (window.Vencord?.SettingsStore?.addChangeListener) {
+            window.Vencord.SettingsStore.addChangeListener('enabledThemes', syncThemes);
+            window.Vencord.SettingsStore.addChangeListener('enabledThemeLinks', syncThemes);
+            window.Vencord.SettingsStore.addChangeListener('useQuickCss', syncThemes);
+        }
+    };
+    hookThemeListeners();
+    setInterval(hookThemeListeners, 3000);
+
+    // 12. Gaming helpers, Mic/Audio control & OLED toasts
+    const clickPanelButton = (type) => {
+        // Search buttons in user panel
+        const panelButtons = Array.from(document.querySelectorAll('section[class*="panels_"] button, [class*="panels_"] button, [class*="accountProfile_"] button'));
+        for (const btn of panelButtons) {
+            const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+            if (type === 'mute' && (label.includes('микрофон') || label.includes('mute') || label.includes('mic'))) {
+                btn.click();
+                const nowMuted = label.includes('отключить') || label.includes('mute');
+                return nowMuted ? 'Микрофон выключен' : 'Микрофон включен';
+            }
+            if (type === 'deafen' && (label.includes('звук') || label.includes('deaf') || label.includes('заглуш'))) {
+                btn.click();
+                const nowDeaf = label.includes('отключить') || label.includes('заглуш') || label.includes('deaf');
+                return nowDeaf ? 'Звук выключен' : 'Звук включен';
+            }
+        }
+
+        // Search all buttons
+        const allButtons = Array.from(document.querySelectorAll('button[aria-label]'));
+        for (const btn of allButtons) {
+            const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+            if (type === 'mute' && (label.includes('микрофон') || label.includes('mute') || label.includes('mic'))) {
+                btn.click();
+                const nowMuted = label.includes('отключить') || label.includes('mute');
+                return nowMuted ? 'Микрофон выключен' : 'Микрофон включен';
+            }
+            if (type === 'deafen' && (label.includes('звук') || label.includes('deaf') || label.includes('заглуш'))) {
+                btn.click();
+                const nowDeaf = label.includes('отключить') || label.includes('заглуш') || label.includes('deaf');
+                return nowDeaf ? 'Звук выключен' : 'Звук включен';
+            }
+        }
+
+        // Positional fallback in account panel (0 = Mic, 1 = Deafen, 2 = Settings)
+        if (panelButtons.length >= 3) {
+            if (type === 'mute') {
+                panelButtons[0].click();
+                return 'Микрофон переключен';
+            }
+            if (type === 'deafen') {
+                panelButtons[1].click();
+                return 'Звук переключен';
+            }
+        }
+
+        return null;
+    };
+
     window.__RUSTCORD__ = {
         gameMode: false,
         toggleGameMode(enable) {
@@ -585,29 +740,75 @@ html, body, #app-mount, .theme-dark {
         },
         toggleMute() {
             try {
-                const wp = window.webpackChunkdiscord_app;
-                if (wp) {
-                    let ok = false;
-                    wp.push([[Symbol()],{},(r)=>{for(const m of Object.values(r.c)){if(m.exports?.default?.toggleSelfMute){m.exports.default.toggleSelfMute();ok=true;break;}}}]);
-                    if (ok) { this.showToast('Микрофон переключен'); return; }
+                const act = window.Vencord?.Webpack?.findByProps?.("toggleSelfMute", "toggleSelfDeaf")
+                    || window.Vencord?.Webpack?.findByProps?.("toggleSelfMute");
+                if (act && typeof act.toggleSelfMute === 'function') {
+                    act.toggleSelfMute();
+                    const store = window.Vencord?.Webpack?.findByProps?.("isSelfMute");
+                    const isMuted = store?.isSelfMute ? store.isSelfMute() : null;
+                    const msg = isMuted === true ? 'Микрофон выключен' : (isMuted === false ? 'Микрофон включен' : 'Микрофон переключен');
+                    this.showToast(msg);
+                    return;
                 }
             } catch(e) {}
-            const b = document.querySelector('button[aria-label*="Mute"], button[aria-label*="Микрофон"]');
-            if (b) b.click();
-            this.showToast('Микрофон переключен');
-        },
-        toggleDeafen() {
+
             try {
                 const wp = window.webpackChunkdiscord_app;
                 if (wp) {
-                    let ok = false;
-                    wp.push([[Symbol()],{},(r)=>{for(const m of Object.values(r.c)){if(m.exports?.default?.toggleSelfDeaf){m.exports.default.toggleSelfDeaf();ok=true;break;}}}]);
-                    if (ok) { this.showToast('Звук переключен'); return; }
+                    let act = null;
+                    wp.push([[Symbol()], {}, (r) => {
+                        for (const m of Object.values(r.c || {})) {
+                            if (m.exports?.toggleSelfMute) { act = m.exports; break; }
+                            if (m.exports?.default?.toggleSelfMute) { act = m.exports.default; break; }
+                            if (m.exports?.Z?.toggleSelfMute) { act = m.exports.Z; break; }
+                        }
+                    }]);
+                    if (act && typeof act.toggleSelfMute === 'function') {
+                        act.toggleSelfMute();
+                        this.showToast('Микрофон переключен');
+                        return;
+                    }
                 }
             } catch(e) {}
-            const b = document.querySelector('button[aria-label*="Deafen"], button[aria-label*="Звук"]');
-            if (b) b.click();
-            this.showToast('Звук переключен');
+
+            const res = clickPanelButton('mute');
+            this.showToast(res || 'Микрофон переключен');
+        },
+        toggleDeafen() {
+            try {
+                const act = window.Vencord?.Webpack?.findByProps?.("toggleSelfDeaf", "toggleSelfMute")
+                    || window.Vencord?.Webpack?.findByProps?.("toggleSelfDeaf");
+                if (act && typeof act.toggleSelfDeaf === 'function') {
+                    act.toggleSelfDeaf();
+                    const store = window.Vencord?.Webpack?.findByProps?.("isSelfDeaf");
+                    const isDeaf = store?.isSelfDeaf ? store.isSelfDeaf() : null;
+                    const msg = isDeaf === true ? 'Звук выключен' : (isDeaf === false ? 'Звук включен' : 'Звук переключен');
+                    this.showToast(msg);
+                    return;
+                }
+            } catch(e) {}
+
+            try {
+                const wp = window.webpackChunkdiscord_app;
+                if (wp) {
+                    let act = null;
+                    wp.push([[Symbol()], {}, (r) => {
+                        for (const m of Object.values(r.c || {})) {
+                            if (m.exports?.toggleSelfDeaf) { act = m.exports; break; }
+                            if (m.exports?.default?.toggleSelfDeaf) { act = m.exports.default; break; }
+                            if (m.exports?.Z?.toggleSelfDeaf) { act = m.exports.Z; break; }
+                        }
+                    }]);
+                    if (act && typeof act.toggleSelfDeaf === 'function') {
+                        act.toggleSelfDeaf();
+                        this.showToast('Звук переключен');
+                        return;
+                    }
+                }
+            } catch(e) {}
+
+            const res = clickPanelButton('deafen');
+            this.showToast(res || 'Звук переключен');
         },
         showToast(text) {
             let t = document.getElementById('rustcord-toast');
