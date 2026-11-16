@@ -163,26 +163,59 @@ pub struct LocalThemeInfo {
 
 #[tauri::command]
 fn get_local_themes() -> Result<Vec<LocalThemeInfo>, String> {
-    let themes_dir = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("com.rustcord.app")
-        .join("themes");
-    let _ = std::fs::create_dir_all(&themes_dir);
+    let mut dirs_to_scan = Vec::new();
+
+    // 1. App local themes folder
+    if let Some(local) = dirs::data_local_dir() {
+        let app_themes = local.join("com.rustcord.app").join("themes");
+        let _ = std::fs::create_dir_all(&app_themes);
+
+        // Pre-seed default EmojiReplace theme (Apple Emojis by DevilBro) if not already created
+        let emoji_theme = app_themes.join("EmojiReplace.theme.css");
+        if !emoji_theme.exists() {
+            let default_emoji_css = r#"/**
+ * @name EmojiReplace
+ * @description Replaces Discord's Emojis with Emojis of a different Provider (Apple, Facebook...)
+ * @author DevilBro
+ * @version 1.0.0
+ * @authorId 278543574059057154
+ * @website https://mwittrien.github.io/
+ * @source https://github.com/mwittrien/BetterDiscordAddons/tree/master/Themes/EmojiReplace/
+ */
+
+@import url(https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/base/Apple.css);
+"#;
+            let _ = std::fs::write(&emoji_theme, default_emoji_css);
+        }
+        dirs_to_scan.push(app_themes);
+    }
+
+    // 2. Scan Equicord, BetterDiscord, and Vencord themes folders in Roaming AppData
+    if let Some(config) = dirs::config_dir() {
+        dirs_to_scan.push(config.join("Equicord").join("themes"));
+        dirs_to_scan.push(config.join("BetterDiscord").join("themes"));
+        dirs_to_scan.push(config.join("Vencord").join("themes"));
+    }
 
     let mut list = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&themes_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension() {
-                    if ext == "css" {
-                        let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                        if let Ok(css) = std::fs::read_to_string(&path) {
-                            list.push(LocalThemeInfo {
-                                name: filename.replace(".theme.css", "").replace(".css", ""),
-                                filename,
-                                css,
-                            });
+    let mut seen_names = std::collections::HashSet::new();
+
+    for themes_dir in dirs_to_scan {
+        if let Ok(entries) = std::fs::read_dir(&themes_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    if filename.ends_with(".css") {
+                        let name = filename.replace(".theme.css", "").replace(".css", "");
+                        if seen_names.insert(name.clone()) {
+                            if let Ok(css) = std::fs::read_to_string(&path) {
+                                list.push(LocalThemeInfo {
+                                    name,
+                                    filename,
+                                    css,
+                                });
+                            }
                         }
                     }
                 }
@@ -281,6 +314,7 @@ pub fn run() {
             .center()
             .shadow(true)
             .visible(false)
+            .disable_drag_drop_handler()
             .initialization_script(&init_script)
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
             .build()?;
@@ -402,17 +436,23 @@ pub fn run() {
 
             info!("[Rustcord] Global shortcuts registered (Ctrl+Shift+M, Ctrl+Shift+D, Ctrl+Shift+G).");
 
-            // 7. Auto-updater background check on launch
+            // 7. Auto-updater background check on launch (Discord-style silent file update)
             let updater_handle = app.handle().clone();
             std::thread::spawn(move || {
+                // Clean up any old executable leftover from previous in-place file replacement
+                if let Ok(exe_path) = std::env::current_exe() {
+                    let old_path = exe_path.with_extension("exe.old");
+                    let _ = std::fs::remove_file(old_path);
+                }
+
                 std::thread::sleep(std::time::Duration::from_secs(8));
                 tauri::async_runtime::block_on(async move {
                     if let Ok(updater) = updater_handle.updater() {
                         match updater.check().await {
                             Ok(Some(update)) => {
-                                info!("[Rustcord Updater] New update available: {}", update.version);
+                                info!("[Rustcord Updater] New update available: v{}. Downloading file update...", update.version);
                                 let _ = update.download_and_install(|_, _| {}, || {
-                                    info!("[Rustcord Updater] Update installed. Restart required.");
+                                    info!("[Rustcord Updater] File update downloaded and applied in-place successfully.");
                                 }).await;
                             }
                             Ok(None) => {

@@ -1,6 +1,6 @@
 [package]
 name = "rustcord"
-version = "1.0.2"
+version = "1.0.3"
 description = "High-performance Discord desktop client with Equicord support"
 authors = ["Rustcord Team"]
 license = "MIT"

@@ -325,6 +325,18 @@ body {
 [class*="winButtons_"], [class*="winButton_"] {
     display: none !important;
 }
+
+/* Ensure Discord HTML5 draggable elements, server icons, folders, and sidebar resize handles work without window dragging interference */
+[class*="resizeHandle_"],
+[class*="resizeHandle"],
+[draggable="true"],
+[class*="guilds_"],
+[class*="listItem_"],
+[class*="sidebar_"],
+[class*="chat_"],
+[class*="panels_"] {
+    -webkit-app-region: no-drag !important;
+}
     `;
 
     // 5. Mount Native Top Titlebar
@@ -422,12 +434,13 @@ body {
 
     window.addEventListener('resize', () => setTimeout(checkMaxUi, 80));
 
-    // Top Titlebar Dragging
+    // Top Titlebar Dragging - strictly scoped to #rustcord-titlebar only
     document.addEventListener('mousedown', (e) => {
-        if (e.button !== 0 || e.clientY > 26) return;
+        if (e.button !== 0) return;
         const t = e.target;
         if (!t) return;
-        if (t.closest('#rustcord-titlebar .rc-tb-controls, button, [role="button"], input, a, select')) return;
+        if (!t.closest('#rustcord-titlebar')) return;
+        if (t.closest('.rc-tb-controls, button, [role="button"], input, a, select')) return;
         if (e.detail === 2) {
             windowToggleMaximize();
             setTimeout(checkMaxUi, 120);
@@ -501,7 +514,63 @@ body {
         console.error('[Rustcord] Equicord execution error:', err);
     }
 
-    // 11. Complete Theme Management Engine (Local files, IndexedDB & Online Themes)
+    // 11. Complete Theme Management Engine with Recursive @import Inliner (Apple Emojis & Online Themes)
+    const cssCache = new Map();
+
+    const resolveAndInlineCss = async (css, depth = 0, seen = new Set()) => {
+        if (!css || depth > 4) return css;
+        const importRegex = /@import\s+(?:url\s*\(\s*['"]?([^'")]+)['"]?\s*\)|['"]([^'"]+)['"])\s*;/g;
+        let match;
+        const matches = [];
+        while ((match = importRegex.exec(css)) !== null) {
+            matches.push({ full: match[0], url: (match[1] || match[2] || '').trim() });
+        }
+        if (matches.length === 0) return css;
+
+        let result = css;
+        for (const item of matches) {
+            const rawUrl = item.url;
+            if (!rawUrl || seen.has(rawUrl)) {
+                result = result.replace(item.full, '');
+                continue;
+            }
+            seen.add(rawUrl);
+
+            try {
+                let fetchedText = cssCache.get(rawUrl) || '';
+                if (!fetchedText) {
+                    if (rawUrl.startsWith('blob:')) {
+                        const resp = await fetch(rawUrl);
+                        if (resp.ok) fetchedText = await resp.text();
+                    } else if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
+                        try {
+                            const res = await invoke('native_fetch', {
+                                request: { url: rawUrl, method: 'GET', headers: {}, body: null }
+                            });
+                            if (res && res.status >= 200 && res.status < 300 && res.body) {
+                                fetchedText = res.body;
+                            }
+                        } catch(e) {
+                            const resp = await fetch(rawUrl);
+                            if (resp.ok) fetchedText = await resp.text();
+                        }
+                    }
+                    if (fetchedText) cssCache.set(rawUrl, fetchedText);
+                }
+
+                if (fetchedText) {
+                    const nested = await resolveAndInlineCss(fetchedText, depth + 1, seen);
+                    result = result.replace(item.full, '/* Inlined: ' + rawUrl + ' */\n' + nested);
+                } else {
+                    result = result.replace(item.full, '/* Failed: ' + rawUrl + ' */');
+                }
+            } catch(e) {
+                result = result.replace(item.full, '/* Error: ' + rawUrl + ' */');
+            }
+        }
+        return result;
+    };
+
     const patchThemes = () => {
         if (window.VencordNative?.themes) {
             window.VencordNative.themes.openFolder = () => invoke('open_themes_folder');
@@ -519,6 +588,25 @@ body {
     patchThemes();
     setInterval(patchThemes, 3000);
 
+    const activeThemeStyles = new Map();
+
+    const applyThemeStyle = (id, css) => {
+        let el = document.getElementById(id);
+        if (!el) {
+            el = document.createElement('style');
+            el.id = id;
+            (document.head || document.documentElement).appendChild(el);
+        }
+        if (el.textContent !== css) {
+            el.textContent = css;
+        }
+    };
+
+    const removeThemeStyle = (id) => {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+    };
+
     const syncThemes = async () => {
         try {
             const settings = window.Vencord?.Settings;
@@ -531,84 +619,98 @@ body {
                 document.documentElement.classList.toggle('custom-theme-active', hasThemes);
             }
 
-            let st = document.getElementById('rustcord-active-theme-css');
-            if (!st) {
-                st = document.createElement('style');
-                st.id = 'rustcord-active-theme-css';
-                (document.head || document.documentElement).appendChild(st);
-            }
+            const currentActiveIds = new Set();
 
             if (!hasThemes) {
-                if (st.textContent !== '') st.textContent = '';
+                for (const [id] of activeThemeStyles) {
+                    removeThemeStyle(id);
+                }
+                activeThemeStyles.clear();
                 return;
             }
 
-            const cssParts = [];
-
-            // 1. Fetch CSS for local themes via VencordNative.themes.getThemeData
+            // 1. Process local themes
             if (Array.isArray(enabledThemes)) {
                 for (const tName of enabledThemes) {
+                    const styleId = 'rustcord-theme-' + tName.replace(/[^a-zA-Z0-9_-]/g, '_');
+                    currentActiveIds.add(styleId);
+
+                    let rawCss = '';
                     try {
                         if (window.VencordNative?.themes?.getThemeData) {
-                            const data = await window.VencordNative.themes.getThemeData(tName);
-                            if (data && typeof data === 'string' && data.length > 0) {
-                                cssParts.push('/* Local Theme: ' + tName + ' */\n' + data);
-                            }
+                            rawCss = await window.VencordNative.themes.getThemeData(tName);
                         }
                     } catch(e) {}
-                }
-            }
 
-            // Fallback / sync from local files in themes folder
-            try {
-                const localThemes = await invoke('get_local_themes');
-                if (Array.isArray(localThemes)) {
-                    for (const t of localThemes) {
-                        if (enabledThemes.includes(t.filename) || enabledThemes.includes(t.name)) {
-                            const alreadyAdded = cssParts.some(p => p.includes(t.filename));
-                            if (!alreadyAdded && t.css) {
-                                cssParts.push('/* Local File: ' + t.filename + ' */\n' + t.css);
-                            }
+                    if (!rawCss) {
+                        try {
+                            const localThemes = await invoke('get_local_themes');
+                            const match = localThemes.find(t => t.filename === tName || t.name === tName);
+                            if (match && match.css) rawCss = match.css;
+                        } catch(e) {}
+                    }
+
+                    if (rawCss) {
+                        // Check local cache first
+                        const cacheKey = 'rc_theme_v2_' + tName;
+                        let inlined = localStorage.getItem(cacheKey);
+                        if (!inlined || !inlined.includes('/* Inlined:')) {
+                            inlined = await resolveAndInlineCss(rawCss);
+                            try { localStorage.setItem(cacheKey, inlined); } catch(e) {}
                         }
+
+                        // Extra enhancement for Apple Emojis theme
+                        if (tName.toLowerCase().includes('emoji') || inlined.includes('mwittrien.github.io')) {
+                            inlined += '\n/* Apple Emoji Universal Fix */\n.emoji[src*="/assets/"], img.emoji[src*="/assets/"], [class*="emoji_"][src*="/assets/"] { background-color: transparent !important; }\n';
+                        }
+
+                        applyThemeStyle(styleId, inlined);
+                        activeThemeStyles.set(styleId, inlined);
                     }
                 }
-            } catch(e) {}
+            }
 
-            // 2. Fetch CSS for online themes
+            // 2. Process online theme links
             if (Array.isArray(enabledLinks)) {
                 for (const link of enabledLinks) {
-                    try {
-                        const cleanLink = link.replace(/^@(light|dark)\s+/, '').trim();
-                        const resp = await fetch(cleanLink);
-                        if (resp.ok) {
-                            const text = await resp.text();
-                            cssParts.push('/* Online Theme: ' + cleanLink + ' */\n' + text);
-                        }
-                    } catch(e) {}
-                }
-            }
+                    const cleanLink = link.replace(/^@(light|dark)\s+/, '').trim();
+                    const styleId = 'rustcord-theme-link-' + cleanLink.replace(/[^a-zA-Z0-9_-]/g, '_');
+                    currentActiveIds.add(styleId);
 
-            // 3. Inspect <style id="vencord-themes"> for any blob URLs
-            const vencordThemesTag = document.getElementById('vencord-themes');
-            if (vencordThemesTag && vencordThemesTag.textContent) {
-                const blobUrls = vencordThemesTag.textContent.match(/blob:https?:\/\/[^\s'")]+/g) || [];
-                for (const bUrl of blobUrls) {
-                    try {
-                        const bResp = await fetch(bUrl);
-                        if (bResp.ok) {
-                            const bText = await bResp.text();
-                            if (bText && !cssParts.some(p => p.includes(bText.slice(0, 50)))) {
-                                cssParts.push('/* Blob Theme */\n' + bText);
+                    const cacheKey = 'rc_link_v2_' + cleanLink;
+                    let inlined = localStorage.getItem(cacheKey);
+                    if (!inlined) {
+                        try {
+                            let text = '';
+                            try {
+                                const res = await invoke('native_fetch', {
+                                    request: { url: cleanLink, method: 'GET', headers: {}, body: null }
+                                });
+                                if (res && res.status >= 200 && res.status < 300) text = res.body;
+                            } catch(e) {
+                                const resp = await fetch(cleanLink);
+                                if (resp.ok) text = await resp.text();
                             }
-                        }
-                    } catch(e) {}
+                            if (text) {
+                                inlined = await resolveAndInlineCss(text);
+                                try { localStorage.setItem(cacheKey, inlined); } catch(e) {}
+                            }
+                        } catch(e) {}
+                    }
+
+                    if (inlined) {
+                        applyThemeStyle(styleId, inlined);
+                        activeThemeStyles.set(styleId, inlined);
+                    }
                 }
             }
 
-            const combined = cssParts.join('\n\n');
-            if (st.textContent !== combined) {
-                st.textContent = combined;
-                console.log('[Rustcord] Theme engine active with ' + cssParts.length + ' theme(s).');
+            // 3. Clean up unmounted themes
+            for (const [id] of activeThemeStyles) {
+                if (!currentActiveIds.has(id)) {
+                    removeThemeStyle(id);
+                    activeThemeStyles.delete(id);
+                }
             }
         } catch(err) {
             console.warn('[Rustcord] Theme sync error:', err);
