@@ -514,63 +514,7 @@ body {
         console.error('[Rustcord] Equicord execution error:', err);
     }
 
-    // 11. Complete Theme Management Engine with Recursive @import Inliner (Apple Emojis & Online Themes)
-    const cssCache = new Map();
-
-    const resolveAndInlineCss = async (css, depth = 0, seen = new Set()) => {
-        if (!css || depth > 4) return css;
-        const importRegex = /@import\s+(?:url\s*\(\s*['"]?([^'")]+)['"]?\s*\)|['"]([^'"]+)['"])\s*;/g;
-        let match;
-        const matches = [];
-        while ((match = importRegex.exec(css)) !== null) {
-            matches.push({ full: match[0], url: (match[1] || match[2] || '').trim() });
-        }
-        if (matches.length === 0) return css;
-
-        let result = css;
-        for (const item of matches) {
-            const rawUrl = item.url;
-            if (!rawUrl || seen.has(rawUrl)) {
-                result = result.replace(item.full, '');
-                continue;
-            }
-            seen.add(rawUrl);
-
-            try {
-                let fetchedText = cssCache.get(rawUrl) || '';
-                if (!fetchedText) {
-                    if (rawUrl.startsWith('blob:')) {
-                        const resp = await fetch(rawUrl);
-                        if (resp.ok) fetchedText = await resp.text();
-                    } else if (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')) {
-                        try {
-                            const res = await invoke('native_fetch', {
-                                request: { url: rawUrl, method: 'GET', headers: {}, body: null }
-                            });
-                            if (res && res.status >= 200 && res.status < 300 && res.body) {
-                                fetchedText = res.body;
-                            }
-                        } catch(e) {
-                            const resp = await fetch(rawUrl);
-                            if (resp.ok) fetchedText = await resp.text();
-                        }
-                    }
-                    if (fetchedText) cssCache.set(rawUrl, fetchedText);
-                }
-
-                if (fetchedText) {
-                    const nested = await resolveAndInlineCss(fetchedText, depth + 1, seen);
-                    result = result.replace(item.full, '/* Inlined: ' + rawUrl + ' */\n' + nested);
-                } else {
-                    result = result.replace(item.full, '/* Failed: ' + rawUrl + ' */');
-                }
-            } catch(e) {
-                result = result.replace(item.full, '/* Error: ' + rawUrl + ' */');
-            }
-        }
-        return result;
-    };
-
+    // 11. Complete Theme Management Engine (Local files, Blob URLs, Hoisted @imports & Apple Emojis)
     const patchThemes = () => {
         if (window.VencordNative?.themes) {
             window.VencordNative.themes.openFolder = () => invoke('open_themes_folder');
@@ -588,27 +532,27 @@ body {
     patchThemes();
     setInterval(patchThemes, 3000);
 
-    const activeThemeStyles = new Map();
+    const onlineCssCache = new Map();
+    const blobCssCache = new Map();
 
-    const applyThemeStyle = (id, css) => {
-        let el = document.getElementById(id);
-        if (!el) {
-            el = document.createElement('style');
-            el.id = id;
-            (document.head || document.documentElement).appendChild(el);
-        }
-        if (el.textContent !== css) {
-            el.textContent = css;
-        }
-    };
-
-    const removeThemeStyle = (id) => {
-        const el = document.getElementById(id);
-        if (el) el.remove();
-    };
+    const APPLE_EMOJI_IMPORTS = [
+        '@import url("https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/base/Apple.css");',
+        '@import url("https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/src/Apple/spritesheets.css");',
+        '@import url("https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/src/Apple/people.css");',
+        '@import url("https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/src/Apple/nature.css");',
+        '@import url("https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/src/Apple/food.css");',
+        '@import url("https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/src/Apple/activity.css");',
+        '@import url("https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/src/Apple/travel.css");',
+        '@import url("https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/src/Apple/objects.css");',
+        '@import url("https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/src/Apple/symbols.css");',
+        '@import url("https://mwittrien.github.io/BetterDiscordAddons/Themes/EmojiReplace/src/Apple/flags.css");'
+    ];
 
     const syncThemes = async () => {
         try {
+            // Clean up any legacy split style elements from previous versions
+            document.querySelectorAll('[id^="rustcord-theme-"]').forEach(el => el.remove());
+
             const settings = window.Vencord?.Settings;
             const enabledThemes = settings?.enabledThemes || [];
             const enabledLinks = settings?.enabledThemeLinks || [];
@@ -619,98 +563,155 @@ body {
                 document.documentElement.classList.toggle('custom-theme-active', hasThemes);
             }
 
-            const currentActiveIds = new Set();
+            let st = document.getElementById('rustcord-active-theme-css');
+            if (!st) {
+                st = document.createElement('style');
+                st.id = 'rustcord-active-theme-css';
+                (document.head || document.documentElement).appendChild(st);
+            }
 
             if (!hasThemes) {
-                for (const [id] of activeThemeStyles) {
-                    removeThemeStyle(id);
-                }
-                activeThemeStyles.clear();
+                if (st.textContent !== '') st.textContent = '';
                 return;
             }
 
-            // 1. Process local themes
+            const rawSnippets = [];
+            let needsAppleEmojis = false;
+
+            // 1. Fetch CSS for local themes
             if (Array.isArray(enabledThemes)) {
                 for (const tName of enabledThemes) {
-                    const styleId = 'rustcord-theme-' + tName.replace(/[^a-zA-Z0-9_-]/g, '_');
-                    currentActiveIds.add(styleId);
-
-                    let rawCss = '';
+                    if (tName.toLowerCase().includes('emoji')) {
+                        needsAppleEmojis = true;
+                    }
                     try {
                         if (window.VencordNative?.themes?.getThemeData) {
-                            rawCss = await window.VencordNative.themes.getThemeData(tName);
+                            const data = await window.VencordNative.themes.getThemeData(tName);
+                            if (data && typeof data === 'string' && data.length > 0) {
+                                rawSnippets.push(data);
+                            }
                         }
                     } catch(e) {}
-
-                    if (!rawCss) {
-                        try {
-                            const localThemes = await invoke('get_local_themes');
-                            const match = localThemes.find(t => t.filename === tName || t.name === tName);
-                            if (match && match.css) rawCss = match.css;
-                        } catch(e) {}
-                    }
-
-                    if (rawCss) {
-                        // Check local cache first
-                        const cacheKey = 'rc_theme_v2_' + tName;
-                        let inlined = localStorage.getItem(cacheKey);
-                        if (!inlined || !inlined.includes('/* Inlined:')) {
-                            inlined = await resolveAndInlineCss(rawCss);
-                            try { localStorage.setItem(cacheKey, inlined); } catch(e) {}
-                        }
-
-                        // Extra enhancement for Apple Emojis theme
-                        if (tName.toLowerCase().includes('emoji') || inlined.includes('mwittrien.github.io')) {
-                            inlined += '\n/* Apple Emoji Universal Fix */\n.emoji[src*="/assets/"], img.emoji[src*="/assets/"], [class*="emoji_"][src*="/assets/"] { background-color: transparent !important; }\n';
-                        }
-
-                        applyThemeStyle(styleId, inlined);
-                        activeThemeStyles.set(styleId, inlined);
-                    }
                 }
             }
 
-            // 2. Process online theme links
+            // Fallback / sync from local files in themes folder
+            try {
+                const localThemes = await invoke('get_local_themes');
+                if (Array.isArray(localThemes)) {
+                    for (const t of localThemes) {
+                        const isEnabled = enabledThemes.includes(t.filename) || enabledThemes.includes(t.name);
+                        if (isEnabled) {
+                            if (t.name.toLowerCase().includes('emoji') || t.filename.toLowerCase().includes('emoji')) {
+                                needsAppleEmojis = true;
+                            }
+                            if (t.css && !rawSnippets.some(s => s.includes(t.css.slice(0, 60)))) {
+                                rawSnippets.push(t.css);
+                            }
+                        }
+                    }
+                }
+            } catch(e) {}
+
+            // 2. Online themes
             if (Array.isArray(enabledLinks)) {
                 for (const link of enabledLinks) {
                     const cleanLink = link.replace(/^@(light|dark)\s+/, '').trim();
-                    const styleId = 'rustcord-theme-link-' + cleanLink.replace(/[^a-zA-Z0-9_-]/g, '_');
-                    currentActiveIds.add(styleId);
-
-                    const cacheKey = 'rc_link_v2_' + cleanLink;
-                    let inlined = localStorage.getItem(cacheKey);
-                    if (!inlined) {
+                    if (cleanLink.toLowerCase().includes('emoji') || cleanLink.includes('mwittrien.github.io')) {
+                        needsAppleEmojis = true;
+                    }
+                    let onlineCss = onlineCssCache.get(cleanLink);
+                    if (!onlineCss) {
                         try {
-                            let text = '';
-                            try {
-                                const res = await invoke('native_fetch', {
-                                    request: { url: cleanLink, method: 'GET', headers: {}, body: null }
-                                });
-                                if (res && res.status >= 200 && res.status < 300) text = res.body;
-                            } catch(e) {
-                                const resp = await fetch(cleanLink);
-                                if (resp.ok) text = await resp.text();
+                            const res = await invoke('native_fetch', {
+                                request: { url: cleanLink, method: 'GET', headers: {}, body: null }
+                            });
+                            if (res && res.status >= 200 && res.status < 300 && res.body) {
+                                onlineCss = res.body;
                             }
-                            if (text) {
-                                inlined = await resolveAndInlineCss(text);
-                                try { localStorage.setItem(cacheKey, inlined); } catch(e) {}
+                        } catch(e) {
+                            try {
+                                const resp = await fetch(cleanLink);
+                                if (resp.ok) onlineCss = await resp.text();
+                            } catch(e2) {}
+                        }
+                        if (onlineCss) onlineCssCache.set(cleanLink, onlineCss);
+                    }
+                    if (onlineCss) rawSnippets.push(onlineCss);
+                }
+            }
+
+            // 3. Inspect <style id="vencord-themes"> for any blob URLs
+            const vencordThemesTag = document.getElementById('vencord-themes');
+            if (vencordThemesTag && vencordThemesTag.textContent) {
+                const blobUrls = vencordThemesTag.textContent.match(/blob:https?:\/\/[^\s'")]+/g) || [];
+                for (const bUrl of blobUrls) {
+                    let bText = blobCssCache.get(bUrl);
+                    if (!bText) {
+                        try {
+                            const bResp = await fetch(bUrl);
+                            if (bResp.ok) {
+                                bText = await bResp.text();
+                                blobCssCache.set(bUrl, bText);
                             }
                         } catch(e) {}
                     }
-
-                    if (inlined) {
-                        applyThemeStyle(styleId, inlined);
-                        activeThemeStyles.set(styleId, inlined);
+                    if (bText && !rawSnippets.some(s => s.includes(bText.slice(0, 60)))) {
+                        rawSnippets.push(bText);
                     }
                 }
             }
 
-            // 3. Clean up unmounted themes
-            for (const [id] of activeThemeStyles) {
-                if (!currentActiveIds.has(id)) {
-                    removeThemeStyle(id);
-                    activeThemeStyles.delete(id);
+            // Check if any snippet references Apple emojis
+            for (const s of rawSnippets) {
+                if (s.includes('EmojiReplace') || s.includes('Apple.css') || s.includes('mwittrien.github.io')) {
+                    needsAppleEmojis = true;
+                    break;
                 }
+            }
+
+            // 4. Extract and HOIST all @import statements to the top
+            const importStatements = new Set();
+            const bodyStatements = [];
+            const importRegex = /@import\s+(?:url\s*\(\s*['"]?([^'")]+)['"]?\s*\)|['"]([^'"]+)['"])\s*;/g;
+
+            if (needsAppleEmojis) {
+                APPLE_EMOJI_IMPORTS.forEach(imp => importStatements.add(imp));
+            }
+
+            for (const snippet of rawSnippets) {
+                let cleaned = snippet;
+                let match;
+                while ((match = importRegex.exec(snippet)) !== null) {
+                    const fullImport = match[0].trim();
+                    const url = (match[1] || match[2] || '').trim();
+                    if (url.includes('Apple.css')) {
+                        needsAppleEmojis = true;
+                        APPLE_EMOJI_IMPORTS.forEach(imp => importStatements.add(imp));
+                    } else if (fullImport) {
+                        importStatements.add(fullImport);
+                    }
+                }
+                cleaned = cleaned.replace(importRegex, '');
+                if (cleaned.trim()) {
+                    bodyStatements.push(cleaned.trim());
+                }
+            }
+
+            if (needsAppleEmojis) {
+                bodyStatements.push(`
+/* Apple Emoji Compatibility & Transparency Overrides */
+.emoji[src*="/assets/"], img.emoji[src*="/assets/"], [class*="emoji_"][src*="/assets/"] {
+    background-color: transparent !important;
+}
+`);
+            }
+
+            const finalCombined = Array.from(importStatements).join('\n') + '\n\n' + bodyStatements.join('\n\n');
+
+            if (st.textContent !== finalCombined) {
+                st.textContent = finalCombined;
+                console.log('[Rustcord] Theme engine active with ' + rawSnippets.length + ' theme snippet(s), ' + importStatements.size + ' hoisted @import(s).');
             }
         } catch(err) {
             console.warn('[Rustcord] Theme sync error:', err);
