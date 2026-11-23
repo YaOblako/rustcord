@@ -184,6 +184,10 @@
             }, 6500);
         };
 
+        if (window.__PENDING_NOTIF__) {
+            window.__RUSTCORD_SHOW_NOTIF__(window.__PENDING_NOTIF__);
+        }
+
         document.getElementById('closeBtn').addEventListener('click', (e) => {
             e.stopPropagation();
             clearTimeout(autoDismissTimer);

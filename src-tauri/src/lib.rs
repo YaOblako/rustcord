@@ -3,7 +3,7 @@ mod equicord;
 use log::info;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Emitter, Manager, WindowEvent};
+use tauri::{Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
 
@@ -12,20 +12,6 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, Stri
     let updater = app.updater().map_err(|e| e.to_string())?;
     let update = updater.check().await.map_err(|e| e.to_string())?;
     Ok(update.map(|u| u.version))
-}
-
-#[derive(serde::Deserialize, serde::Serialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct ShowNotificationPayload {
-    pub title: String,
-    #[serde(alias = "title_html")]
-    pub title_html: Option<String>,
-    pub body: String,
-    pub avatar: String,
-    #[serde(alias = "guild_id")]
-    pub guild_id: Option<String>,
-    #[serde(alias = "channel_id")]
-    pub channel_id: String,
 }
 
 #[cfg(target_os = "windows")]
@@ -39,6 +25,10 @@ struct RECT {
 
 #[cfg(target_os = "windows")]
 fn position_and_show_notification(win: &tauri::WebviewWindow) {
+    let _ = win.show();
+    let _ = win.unminimize();
+    let _ = win.set_always_on_top(true);
+
     if let Ok(hwnd) = win.hwnd() {
         let hwnd = hwnd.0 as isize;
         let mut work_area = RECT { left: 0, top: 0, right: 1920, bottom: 1040 };
@@ -46,13 +36,17 @@ fn position_and_show_notification(win: &tauri::WebviewWindow) {
             SystemParametersInfoW(48, 0, &mut work_area as *mut RECT, 0); // SPI_GETWORKAREA = 48
         }
 
-        let scale = win.current_monitor().ok().flatten().map(|m| m.scale_factor()).unwrap_or(1.0);
-        let phys_w = (350.0 * scale) as i32;
-        let phys_h = (68.0 * scale) as i32;
-        let margin = (12.0 * scale) as i32;
+        if work_area.right <= 0 || work_area.bottom <= 0 {
+            work_area.right = 1920;
+            work_area.bottom = 1040;
+        }
 
-        let x = work_area.right - phys_w - margin;
-        let y = work_area.bottom - phys_h - margin;
+        let width = 360;
+        let height = 76;
+        let margin = 14;
+
+        let x = work_area.right - width - margin;
+        let y = work_area.bottom - height - margin;
 
         unsafe {
             SetWindowPos(
@@ -60,8 +54,8 @@ fn position_and_show_notification(win: &tauri::WebviewWindow) {
                 -1, // HWND_TOPMOST
                 x,
                 y,
-                phys_w,
-                phys_h,
+                width,
+                height,
                 0x0040 | 0x0010, // SWP_SHOWWINDOW | SWP_NOACTIVATE
             );
         }
@@ -69,20 +63,33 @@ fn position_and_show_notification(win: &tauri::WebviewWindow) {
 }
 
 #[tauri::command]
-fn show_desktop_notification(app: tauri::AppHandle, payload: ShowNotificationPayload) {
+fn show_desktop_notification(app: tauri::AppHandle, payload: Option<serde_json::Value>) {
     if let Some(win) = app.get_webview_window("notification_window") {
-        let title_html = payload.title_html.clone().unwrap_or_else(|| payload.title.clone());
+        let data = payload.unwrap_or_default();
+        let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("Discord").to_string();
+        let title_html = data.get("titleHtml")
+            .or_else(|| data.get("title_html"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(&title)
+            .to_string();
+        let body = data.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let avatar = data.get("avatar").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let guild_id = data.get("guildId").or_else(|| data.get("guild_id")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let channel_id = data.get("channelId").or_else(|| data.get("channel_id")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+
         let payload_json = serde_json::to_string(&serde_json::json!({
-            "title": payload.title,
+            "title": title,
             "titleHtml": title_html,
-            "body": payload.body,
-            "avatar": payload.avatar,
-            "guildId": payload.guild_id,
-            "channelId": payload.channel_id,
+            "body": body,
+            "avatar": avatar,
+            "guildId": guild_id,
+            "channelId": channel_id,
         })).unwrap_or_default();
 
-        let _ = win.eval(&format!("window.__RUSTCORD_SHOW_NOTIF__ && window.__RUSTCORD_SHOW_NOTIF__({});", payload_json));
-        let _ = win.emit("show_notification", &payload);
+        let _ = win.eval(&format!(
+            "window.__PENDING_NOTIF__ = {0}; if (window.__RUSTCORD_SHOW_NOTIF__) window.__RUSTCORD_SHOW_NOTIF__({0});",
+            payload_json
+        ));
 
         #[cfg(target_os = "windows")]
         position_and_show_notification(&win);
