@@ -125,6 +125,213 @@ pub fn build_initialization_script(equicord_js: &str, equicord_css: &str) -> Str
         }
     });
 
+    // === [Rustcord Telegram-Style Notification Engine & Polyfill] ===
+    const recentlySeenMsgIds = new Set();
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function playTelegramChime() {
+        try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (!AudioCtx) return;
+            const ctx = new AudioCtx();
+            if (ctx.state === 'suspended') {
+                ctx.resume().catch(() => {});
+            }
+            const now = ctx.currentTime;
+
+            // Soft 2-tone melodic chime (D5 -> A5)
+            const osc1 = ctx.createOscillator();
+            const gain1 = ctx.createGain();
+            osc1.type = 'sine';
+            osc1.frequency.setValueAtTime(587.33, now);
+            gain1.gain.setValueAtTime(0.18, now);
+            gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+            osc1.connect(gain1);
+            gain1.connect(ctx.destination);
+            osc1.start(now);
+            osc1.stop(now + 0.12);
+
+            const osc2 = ctx.createOscillator();
+            const gain2 = ctx.createGain();
+            osc2.type = 'sine';
+            osc2.frequency.setValueAtTime(880.0, now + 0.08);
+            gain2.gain.setValueAtTime(0.22, now + 0.08);
+            gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+            osc2.connect(gain2);
+            gain2.connect(ctx.destination);
+            osc2.start(now + 0.08);
+            osc2.stop(now + 0.28);
+        } catch(e) {}
+    }
+
+    function showTelegramToast(opts) {
+        try {
+            let container = document.getElementById('rustcord-notifications-container');
+            if (!container) {
+                container = document.createElement('div');
+                container.id = 'rustcord-notifications-container';
+                (document.body || document.documentElement).appendChild(container);
+            }
+
+            // Keep max 4 visible notifications
+            while (container.children.length >= 4) {
+                const oldest = container.lastElementChild;
+                if (oldest) oldest.remove();
+            }
+
+            playTelegramChime();
+
+            const toast = document.createElement('div');
+            toast.className = 'rc-tg-toast';
+
+            const contextText = opts.context || 'Личные сообщения';
+            const authorText = opts.author || 'Discord';
+            const msgText = opts.text || '';
+            const avatarUrl = opts.avatar || 'https://cdn.discordapp.com/embed/avatars/0.png';
+
+            toast.innerHTML = `
+                <div class="rc-tg-header">
+                    <span class="rc-tg-context-title">${escapeHtml(contextText)}</span>
+                    <button class="rc-tg-close-btn" title="Закрыть">
+                        <svg width="10" height="10" viewBox="0 0 10 10">
+                            <polygon fill="currentColor" points="10 0.7 9.3 0 5 4.3 0.7 0 0 0.7 4.3 5 0 9.3 0.7 10 5 5.7 9.3 10 10 9.3 5.7 5"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="rc-tg-content">
+                    <img class="rc-tg-avatar" src="${escapeHtml(avatarUrl)}" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'" alt="" />
+                    <div class="rc-tg-body-col">
+                        <div class="rc-tg-author">${escapeHtml(authorText)}</div>
+                        <div class="rc-tg-text">${escapeHtml(msgText)}</div>
+                    </div>
+                </div>
+            `;
+
+            let isDismissed = false;
+            let autoDismissTimer = null;
+
+            const dismiss = () => {
+                if (isDismissed) return;
+                isDismissed = true;
+                clearTimeout(autoDismissTimer);
+                toast.classList.remove('rc-tg-visible');
+                setTimeout(() => {
+                    if (toast.parentNode) toast.parentNode.removeChild(toast);
+                }, 250);
+            };
+
+            const startDismissTimer = (ms = 6500) => {
+                clearTimeout(autoDismissTimer);
+                autoDismissTimer = setTimeout(dismiss, ms);
+            };
+
+            const closeBtn = toast.querySelector('.rc-tg-close-btn');
+            if (closeBtn) {
+                closeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    dismiss();
+                    if (typeof opts.onClose === 'function') opts.onClose();
+                });
+            }
+
+            toast.addEventListener('click', (e) => {
+                dismiss();
+                if (typeof opts.onClick === 'function') {
+                    opts.onClick();
+                } else {
+                    invoke('window_reveal').catch(() => {});
+                }
+            });
+
+            toast.addEventListener('mouseenter', () => clearTimeout(autoDismissTimer));
+            toast.addEventListener('mouseleave', () => startDismissTimer(3500));
+
+            container.insertBefore(toast, container.firstChild);
+
+            requestAnimationFrame(() => {
+                toast.classList.add('rc-tg-visible');
+            });
+
+            startDismissTimer(6500);
+        } catch(err) {
+            console.warn('[Rustcord] showTelegramToast error:', err);
+        }
+    }
+
+    // Polyfill window.Notification with permission = 'granted'
+    class RustcordNotification extends EventTarget {
+        static get permission() {
+            return 'granted';
+        }
+        static requestPermission(cb) {
+            if (typeof cb === 'function') cb('granted');
+            return Promise.resolve('granted');
+        }
+        constructor(title, options = {}) {
+            super();
+            this.title = title || 'Discord';
+            this.body = options.body || '';
+            this.icon = options.icon || '';
+            this.tag = options.tag || '';
+            this.data = options.data || null;
+
+            const dedupeKey = 'notif_' + this.title + '_' + this.body;
+            if (!recentlySeenMsgIds.has(dedupeKey)) {
+                recentlySeenMsgIds.add(dedupeKey);
+                setTimeout(() => recentlySeenMsgIds.delete(dedupeKey), 4000);
+
+                showTelegramToast({
+                    context: 'Discord',
+                    author: this.title,
+                    text: this.body || 'Новое уведомление',
+                    avatar: this.icon || 'https://cdn.discordapp.com/embed/avatars/0.png',
+                    onClick: () => {
+                        invoke('window_reveal').catch(() => {});
+                        if (typeof this.onclick === 'function') this.onclick(new Event('click'));
+                        this.dispatchEvent(new Event('click'));
+                    },
+                    onClose: () => {
+                        if (typeof this.onclose === 'function') this.onclose(new Event('close'));
+                        this.dispatchEvent(new Event('close'));
+                    }
+                });
+
+                if (typeof document.hasFocus === 'function' && !document.hasFocus()) {
+                    invoke('notify_attention').catch(() => {});
+                }
+            }
+
+            setTimeout(() => {
+                if (typeof this.onshow === 'function') this.onshow(new Event('show'));
+                this.dispatchEvent(new Event('show'));
+            }, 30);
+        }
+        close() {
+            if (typeof this.onclose === 'function') this.onclose(new Event('close'));
+            this.dispatchEvent(new Event('close'));
+        }
+    }
+
+    try {
+        Object.defineProperty(window, 'Notification', {
+            value: RustcordNotification,
+            writable: false,
+            configurable: true
+        });
+    } catch(e) {
+        window.Notification = RustcordNotification;
+    }
+
     // 3. Selective Native Fetch Proxy (ONLY for Cloud OAuth & External Themes)
     // NEVER touches relative paths, Discord APIs, Discord CDNs, or WebSockets!
     const _origFetch = window.fetch;
@@ -333,6 +540,135 @@ body {
     border-radius: 12px !important;
     border: none !important;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+/* ===== Telegram-Style Borderless Dark Notifications Container & Cards ===== */
+#rustcord-notifications-container {
+    position: fixed !important;
+    bottom: 24px !important;
+    right: 24px !important;
+    z-index: 2147483647 !important;
+    display: flex !important;
+    flex-direction: column-reverse !important;
+    gap: 8px !important;
+    pointer-events: none !important;
+    width: 330px !important;
+    max-width: calc(100vw - 48px) !important;
+}
+
+.rc-tg-toast {
+    position: relative !important;
+    pointer-events: auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    background-color: var(--background-floating, var(--bg-surface-overlay, #111214)) !important;
+    border-radius: 12px !important;
+    border: none !important;
+    outline: none !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+    padding: 10px 14px !important;
+    cursor: pointer !important;
+    user-select: none !important;
+    box-sizing: border-box !important;
+    transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important;
+    font-family: 'gg sans', 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+}
+
+.rc-tg-toast.rc-tg-visible {
+    opacity: 1 !important;
+    transform: translateY(0) scale(1) !important;
+}
+
+.rc-tg-toast:hover {
+    background-color: var(--background-secondary-alt, #18191c) !important;
+}
+
+.rc-tg-header {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    margin-bottom: 6px !important;
+}
+
+.rc-tg-context-title {
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    color: var(--header-secondary, #949ba4) !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.3px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    max-width: 270px !important;
+}
+
+.rc-tg-close-btn {
+    background: transparent !important;
+    border: none !important;
+    outline: none !important;
+    color: var(--interactive-normal, #949ba4) !important;
+    cursor: pointer !important;
+    padding: 2px !important;
+    border-radius: 4px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    line-height: 1 !important;
+    transition: color 0.12s ease, background-color 0.12s ease !important;
+}
+
+.rc-tg-close-btn:hover {
+    color: var(--interactive-hover, #ffffff) !important;
+    background-color: var(--background-modifier-hover, rgba(255, 255, 255, 0.12)) !important;
+}
+
+.rc-tg-content {
+    display: flex !important;
+    align-items: center !important;
+    gap: 11px !important;
+}
+
+.rc-tg-avatar {
+    width: 38px !important;
+    height: 38px !important;
+    border-radius: 50% !important;
+    object-fit: cover !important;
+    flex-shrink: 0 !important;
+    background-color: #2b2d31 !important;
+}
+
+.rc-tg-body-col {
+    display: flex !important;
+    flex-direction: column !important;
+    flex: 1 !important;
+    min-width: 0 !important;
+}
+
+.rc-tg-author {
+    font-size: 13.5px !important;
+    font-weight: 600 !important;
+    color: var(--header-primary, #f2f3f5) !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    line-height: 1.25 !important;
+    margin-bottom: 2px !important;
+}
+
+.rc-tg-text {
+    font-size: 12.5px !important;
+    color: var(--text-muted, #949ba4) !important;
+    line-height: 1.35 !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical !important;
+    word-break: break-word !important;
 }
 
 /* Hide web-generated or duplicate winButtons */
@@ -938,6 +1274,15 @@ body {
                 t.style.opacity = '0';
                 t.style.transform = 'translateY(8px)';
             }, 2500);
+        },
+        showNotification: showTelegramToast,
+        testNotification() {
+            showTelegramToast({
+                context: 'Личные сообщения',
+                author: 'Beluga .net',
+                text: 'Тестовое уведомление в стиле Telegram',
+                avatar: 'https://cdn.discordapp.com/embed/avatars/0.png'
+            });
         }
     };
 
@@ -1002,6 +1347,157 @@ body {
     };
 
     setInterval(checkVoiceState, 150);
+
+    // 14. Telegram Notifications Dispatcher Hook
+    let _dispatcherHooked = false;
+    const hookFluxDispatcher = () => {
+        if (_dispatcherHooked) return;
+        try {
+            let dispatcher = window.Vencord?.Webpack?.Common?.FluxDispatcher
+                || window.Vencord?.Webpack?.findByProps?.("dispatch", "subscribe");
+
+            if (!dispatcher && window.webpackChunkdiscord_app) {
+                window.webpackChunkdiscord_app.push([[Symbol()], {}, (r) => {
+                    for (const m of Object.values(r.c || {})) {
+                        if (m.exports?.dispatch && m.exports?.subscribe) {
+                            dispatcher = m.exports;
+                            break;
+                        }
+                        if (m.exports?.default?.dispatch && m.exports?.default?.subscribe) {
+                            dispatcher = m.exports.default;
+                            break;
+                        }
+                    }
+                }]);
+            }
+
+            if (dispatcher && typeof dispatcher.subscribe === 'function') {
+                dispatcher.subscribe('MESSAGE_CREATE', (e) => {
+                    try {
+                        if (!e || !e.message) return;
+                        const msg = e.message;
+                        const author = msg.author;
+                        if (!author) return;
+
+                        // 1. Current user check (skip own messages)
+                        let currentUserId = null;
+                        try {
+                            const userStore = window.Vencord?.Webpack?.Common?.UserStore
+                                || window.Vencord?.Webpack?.findByProps?.("getCurrentUser")
+                                || window.Vencord?.Webpack?.findStore?.("UserStore");
+                            currentUserId = userStore?.getCurrentUser?.()?.id;
+                        } catch(err) {}
+
+                        if (currentUserId && author.id === currentUserId) return;
+
+                        // 2. Active channel check (if user is currently viewing this exact chat and window has focus, skip)
+                        let currentChannelId = null;
+                        try {
+                            const chStore = window.Vencord?.Webpack?.Common?.SelectedChannelStore
+                                || window.Vencord?.Webpack?.findByProps?.("getChannelId", "getVoiceChannelId")
+                                || window.Vencord?.Webpack?.findStore?.("SelectedChannelStore");
+                            currentChannelId = chStore?.getChannelId?.();
+                        } catch(err) {}
+
+                        const isViewingThisChannel = (e.channelId && currentChannelId && e.channelId === currentChannelId);
+                        const isDocFocused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
+
+                        if (isViewingThisChannel && isDocFocused) return;
+
+                        // 3. Deduplication (skip duplicate events)
+                        const msgId = msg.id || (author.id + '_' + (msg.content || '').slice(0, 30));
+                        if (recentlySeenMsgIds.has(msgId)) return;
+                        recentlySeenMsgIds.add(msgId);
+                        setTimeout(() => recentlySeenMsgIds.delete(msgId), 5000);
+
+                        // 4. Resolve context name (server / channel / DM)
+                        let contextName = 'Личные сообщения';
+                        if (e.guildId) {
+                            try {
+                                const guildStore = window.Vencord?.Webpack?.Common?.GuildStore
+                                    || window.Vencord?.Webpack?.findByProps?.("getGuild")
+                                    || window.Vencord?.Webpack?.findStore?.("GuildStore");
+                                const chStore = window.Vencord?.Webpack?.Common?.ChannelStore
+                                    || window.Vencord?.Webpack?.findByProps?.("getChannel")
+                                    || window.Vencord?.Webpack?.findStore?.("ChannelStore");
+                                const guild = guildStore?.getGuild?.(e.guildId);
+                                const ch = chStore?.getChannel?.(e.channelId);
+                                if (guild && ch) {
+                                    contextName = `${guild.name} • #${ch.name}`;
+                                } else if (guild) {
+                                    contextName = guild.name;
+                                } else if (ch) {
+                                    contextName = `#${ch.name}`;
+                                }
+                            } catch(err) {
+                                contextName = 'Сервер';
+                            }
+                        } else {
+                            try {
+                                const chStore = window.Vencord?.Webpack?.Common?.ChannelStore
+                                    || window.Vencord?.Webpack?.findByProps?.("getChannel")
+                                    || window.Vencord?.Webpack?.findStore?.("ChannelStore");
+                                const ch = chStore?.getChannel?.(e.channelId);
+                                if (ch && ch.name) {
+                                    contextName = ch.name;
+                                }
+                            } catch(err) {}
+                        }
+
+                        // 5. Author name & Avatar
+                        const authorName = author.global_name || author.username || 'Пользователь';
+                        let avatarUrl = 'https://cdn.discordapp.com/embed/avatars/0.png';
+                        if (author.id && author.avatar) {
+                            avatarUrl = `https://cdn.discordapp.com/avatars/${author.id}/${author.avatar}.png?size=128`;
+                        }
+
+                        // 6. Message preview
+                        let bodyText = (msg.content || '').trim();
+                        if (!bodyText && msg.attachments && msg.attachments.length > 0) {
+                            bodyText = '[Вложение]';
+                        } else if (!bodyText && msg.embeds && msg.embeds.length > 0) {
+                            bodyText = '[Встроенное сообщение]';
+                        } else if (!bodyText && msg.sticker_items && msg.sticker_items.length > 0) {
+                            bodyText = '[Стикер]';
+                        }
+                        if (!bodyText) bodyText = 'Новое сообщение';
+
+                        // 7. Show Telegram toast!
+                        showTelegramToast({
+                            context: contextName,
+                            author: authorName,
+                            text: bodyText,
+                            avatar: avatarUrl,
+                            onClick: () => {
+                                invoke('window_reveal').catch(() => {});
+                                try {
+                                    const nav = window.Vencord?.Webpack?.findByProps?.("selectChannel")
+                                        || window.Vencord?.Webpack?.Common?.NavigationUtils;
+                                    if (nav && typeof nav.selectChannel === 'function') {
+                                        nav.selectChannel(e.guildId || null, e.channelId);
+                                    } else if (window.Vencord?.Webpack?.findByProps?.("transitionTo")) {
+                                        const path = e.guildId ? `/channels/${e.guildId}/${e.channelId}` : `/channels/@me/${e.channelId}`;
+                                        window.Vencord.Webpack.findByProps("transitionTo").transitionTo(path);
+                                    }
+                                } catch(err) {}
+                            }
+                        });
+
+                        // 8. Flash taskbar if window is not focused
+                        if (!isDocFocused) {
+                            invoke('notify_attention').catch(() => {});
+                        }
+                    } catch(err) {
+                        console.warn('[Rustcord] handleMessageCreate error:', err);
+                    }
+                });
+                _dispatcherHooked = true;
+                console.log('[Rustcord] Telegram notifications hooked into FluxDispatcher.');
+            }
+        } catch(e) {}
+    };
+
+    setInterval(hookFluxDispatcher, 1000);
 
     console.log('[Rustcord] Pre-load hooks v4 installed.');
 })();

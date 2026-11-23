@@ -15,6 +15,19 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, Stri
 }
 
 #[tauri::command]
+fn window_reveal(window: tauri::WebviewWindow) {
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+}
+
+#[tauri::command]
+fn notify_attention(window: tauri::WebviewWindow) {
+    let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+}
+
+#[tauri::command]
 fn window_minimize(window: tauri::WebviewWindow) {
     let _ = window.minimize();
 }
@@ -451,7 +464,7 @@ pub fn run() {
     {
         let current_args = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
         let new_args = format!(
-            "{} --disable-web-security --allow-running-insecure-content",
+            "{} --disable-web-security --allow-running-insecure-content --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding",
             current_args
         );
         std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", new_args.trim());
@@ -473,6 +486,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             check_for_updates,
+            window_reveal,
+            notify_attention,
             window_minimize,
             window_toggle_maximize,
             window_close,
