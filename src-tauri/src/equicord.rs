@@ -175,6 +175,19 @@ pub fn build_initialization_script(equicord_js: &str, equicord_css: &str) -> Str
 
     function showTelegramToast(opts) {
         try {
+            // 1. Trigger Desktop Floating Notification Window (visible outside app over games/desktop/browser)
+            invoke('show_desktop_notification', {
+                payload: {
+                    title: opts.author || 'Discord',
+                    title_html: opts.titleHtml || null,
+                    body: opts.text || '',
+                    avatar: opts.avatar || 'https://cdn.discordapp.com/embed/avatars/0.png',
+                    guild_id: opts.guildId || null,
+                    channel_id: opts.channelId || ''
+                }
+            }).catch(() => {});
+
+            // 2. In-App Notification Toast inside Discord
             let container = document.getElementById('rustcord-notifications-container');
             if (!container) {
                 container = document.createElement('div');
@@ -193,26 +206,23 @@ pub fn build_initialization_script(equicord_js: &str, equicord_css: &str) -> Str
             const toast = document.createElement('div');
             toast.className = 'rc-tg-toast';
 
-            const contextText = opts.context || 'Личные сообщения';
             const authorText = opts.author || 'Discord';
+            const titleHtml = opts.titleHtml || escapeHtml(authorText);
             const msgText = opts.text || '';
             const avatarUrl = opts.avatar || 'https://cdn.discordapp.com/embed/avatars/0.png';
 
             toast.innerHTML = `
-                <div class="rc-tg-header">
-                    <span class="rc-tg-context-title">${escapeHtml(contextText)}</span>
-                    <button class="rc-tg-close-btn" title="Закрыть">
-                        <svg width="10" height="10" viewBox="0 0 10 10">
-                            <polygon fill="currentColor" points="10 0.7 9.3 0 5 4.3 0.7 0 0 0.7 4.3 5 0 9.3 0.7 10 5 5.7 9.3 10 10 9.3 5.7 5"/>
-                        </svg>
-                    </button>
-                </div>
-                <div class="rc-tg-content">
-                    <img class="rc-tg-avatar" src="${escapeHtml(avatarUrl)}" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'" alt="" />
-                    <div class="rc-tg-body-col">
-                        <div class="rc-tg-author">${escapeHtml(authorText)}</div>
-                        <div class="rc-tg-text">${escapeHtml(msgText)}</div>
+                <img class="rc-tg-avatar" src="${escapeHtml(avatarUrl)}" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'" alt="" />
+                <div class="rc-tg-body-col">
+                    <div class="rc-tg-top-row">
+                        <span class="rc-tg-title">${titleHtml}</span>
+                        <button class="rc-tg-close-btn" title="Закрыть">
+                            <svg width="10" height="10" viewBox="0 0 10 10">
+                                <polygon fill="currentColor" points="10 0.7 9.3 0 5 4.3 0.7 0 0 0.7 4.3 5 0 9.3 0.7 10 5 5.7 9.3 10 10 9.3 5.7 5"/>
+                            </svg>
+                        </button>
                     </div>
+                    <div class="rc-tg-text">${escapeHtml(msgText)}</div>
                 </div>
             `;
 
@@ -552,7 +562,7 @@ body {
     flex-direction: column-reverse !important;
     gap: 8px !important;
     pointer-events: none !important;
-    width: 330px !important;
+    width: 340px !important;
     max-width: calc(100vw - 48px) !important;
 }
 
@@ -560,12 +570,12 @@ body {
     position: relative !important;
     pointer-events: auto !important;
     display: flex !important;
-    flex-direction: column !important;
-    background-color: var(--background-floating, var(--bg-surface-overlay, #111214)) !important;
+    align-items: center !important;
+    background-color: #111214 !important;
     border-radius: 12px !important;
     border: none !important;
     outline: none !important;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4) !important;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.75), 0 2px 8px rgba(0, 0, 0, 0.5) !important;
     padding: 10px 14px !important;
     cursor: pointer !important;
     user-select: none !important;
@@ -575,7 +585,8 @@ body {
     transform: translateY(16px) scale(0.96);
     backdrop-filter: blur(20px) !important;
     -webkit-backdrop-filter: blur(20px) !important;
-    font-family: 'gg sans', 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+    font-family: 'gg sans', 'Segoe UI', -apple-system, Roboto, sans-serif !important;
+    gap: 12px !important;
 }
 
 .rc-tg-toast.rc-tg-visible {
@@ -584,57 +595,12 @@ body {
 }
 
 .rc-tg-toast:hover {
-    background-color: var(--background-secondary-alt, #18191c) !important;
-}
-
-.rc-tg-header {
-    display: flex !important;
-    align-items: center !important;
-    justify-content: space-between !important;
-    margin-bottom: 6px !important;
-}
-
-.rc-tg-context-title {
-    font-size: 11px !important;
-    font-weight: 700 !important;
-    color: var(--header-secondary, #949ba4) !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.3px !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
-    max-width: 270px !important;
-}
-
-.rc-tg-close-btn {
-    background: transparent !important;
-    border: none !important;
-    outline: none !important;
-    color: var(--interactive-normal, #949ba4) !important;
-    cursor: pointer !important;
-    padding: 2px !important;
-    border-radius: 4px !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    line-height: 1 !important;
-    transition: color 0.12s ease, background-color 0.12s ease !important;
-}
-
-.rc-tg-close-btn:hover {
-    color: var(--interactive-hover, #ffffff) !important;
-    background-color: var(--background-modifier-hover, rgba(255, 255, 255, 0.12)) !important;
-}
-
-.rc-tg-content {
-    display: flex !important;
-    align-items: center !important;
-    gap: 11px !important;
+    background-color: #18191c !important;
 }
 
 .rc-tg-avatar {
-    width: 38px !important;
-    height: 38px !important;
+    width: 40px !important;
+    height: 40px !important;
     border-radius: 50% !important;
     object-fit: cover !important;
     flex-shrink: 0 !important;
@@ -648,27 +614,60 @@ body {
     min-width: 0 !important;
 }
 
-.rc-tg-author {
+.rc-tg-top-row {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    margin-bottom: 2px !important;
+}
+
+.rc-tg-title {
     font-size: 13.5px !important;
     font-weight: 600 !important;
-    color: var(--header-primary, #f2f3f5) !important;
+    color: #f2f3f5 !important;
     white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
     line-height: 1.25 !important;
-    margin-bottom: 2px !important;
+}
+
+.rc-tg-title .you {
+    color: #949ba4 !important;
+    font-weight: 500 !important;
+    font-size: 12.5px !important;
+    margin-left: 2px !important;
+}
+
+.rc-tg-close-btn {
+    background: transparent !important;
+    border: none !important;
+    outline: none !important;
+    color: #949ba4 !important;
+    cursor: pointer !important;
+    padding: 2px 4px !important;
+    border-radius: 4px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    line-height: 1 !important;
+    transition: color 0.12s ease, background-color 0.12s ease !important;
+}
+
+.rc-tg-close-btn:hover {
+    color: #ffffff !important;
+    background-color: rgba(255, 255, 255, 0.12) !important;
 }
 
 .rc-tg-text {
     font-size: 12.5px !important;
-    color: var(--text-muted, #949ba4) !important;
+    color: #949ba4 !important;
     line-height: 1.35 !important;
+    white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
-    display: -webkit-box !important;
-    -webkit-line-clamp: 2 !important;
-    -webkit-box-orient: vertical !important;
-    word-break: break-word !important;
 }
 
 /* Hide web-generated or duplicate winButtons */
@@ -1278,9 +1277,9 @@ body {
         showNotification: showTelegramToast,
         testNotification() {
             showTelegramToast({
-                context: 'Личные сообщения',
-                author: 'Beluga .net',
-                text: 'Тестовое уведомление в стиле Telegram',
+                author: 'Slim md3 (you)',
+                titleHtml: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="vertical-align:middle;margin-right:4px;"><path d="m3 11 18-5v12L3 14v-3z"></path><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"></path></svg>Slim md3 <span class="you">(you)</span>',
+                text: 'На какой бете вы сидите?',
                 avatar: 'https://cdn.discordapp.com/embed/avatars/0.png'
             });
         }
@@ -1381,16 +1380,56 @@ body {
 
                         // 1. Current user check (skip own messages)
                         let currentUserId = null;
+                        let currentUserUsername = null;
                         try {
                             const userStore = window.Vencord?.Webpack?.Common?.UserStore
                                 || window.Vencord?.Webpack?.findByProps?.("getCurrentUser")
                                 || window.Vencord?.Webpack?.findStore?.("UserStore");
-                            currentUserId = userStore?.getCurrentUser?.()?.id;
+                            const u = userStore?.getCurrentUser?.();
+                            currentUserId = u?.id;
+                            currentUserUsername = u?.username;
                         } catch(err) {}
 
                         if (currentUserId && author.id === currentUserId) return;
 
-                        // 2. Active channel check (if user is currently viewing this exact chat and window has focus, skip)
+                        // 2. STRICT FILTER: ONLY PINGS (MENTIONS), REPLIES TO ME, @EVERYONE, AND DMS ALLOWED!
+                        const isDM = !e.guildId;
+                        let isMentioned = false;
+                        let isReplyToMe = false;
+
+                        if (currentUserId && Array.isArray(msg.mentions)) {
+                            isMentioned = msg.mentions.some(m => m && m.id === currentUserId);
+                        }
+
+                        if (!isMentioned && currentUserId && typeof msg.content === 'string') {
+                            isMentioned = msg.content.includes('<@' + currentUserId + '>') || msg.content.includes('<@!' + currentUserId + '>');
+                        }
+
+                        if (currentUserId && msg.referenced_message?.author?.id === currentUserId) {
+                            isReplyToMe = true;
+                        }
+
+                        const isEveryone = msg.mention_everyone === true;
+
+                        // Check role mentions
+                        if (!isMentioned && currentUserId && e.guildId && Array.isArray(msg.mention_roles) && msg.mention_roles.length > 0) {
+                            try {
+                                const guildMemberStore = window.Vencord?.Webpack?.Common?.GuildMemberStore
+                                    || window.Vencord?.Webpack?.findByProps?.("getMember")
+                                    || window.Vencord?.Webpack?.findStore?.("GuildMemberStore");
+                                const member = guildMemberStore?.getMember?.(e.guildId, currentUserId);
+                                if (member && Array.isArray(member.roles)) {
+                                    isMentioned = msg.mention_roles.some(r => member.roles.includes(r));
+                                }
+                            } catch(err) {}
+                        }
+
+                        // STRICT FILTER: If NOT a DM and NOT mentioned and NOT a reply to me and NOT @everyone -> SKIP!
+                        if (!isDM && !isMentioned && !isReplyToMe && !isEveryone) {
+                            return;
+                        }
+
+                        // 3. Active channel check (if user is currently viewing this exact chat and window has focus, skip)
                         let currentChannelId = null;
                         try {
                             const chStore = window.Vencord?.Webpack?.Common?.SelectedChannelStore
@@ -1404,45 +1443,11 @@ body {
 
                         if (isViewingThisChannel && isDocFocused) return;
 
-                        // 3. Deduplication (skip duplicate events)
+                        // 4. Deduplication (skip duplicate events)
                         const msgId = msg.id || (author.id + '_' + (msg.content || '').slice(0, 30));
                         if (recentlySeenMsgIds.has(msgId)) return;
                         recentlySeenMsgIds.add(msgId);
                         setTimeout(() => recentlySeenMsgIds.delete(msgId), 5000);
-
-                        // 4. Resolve context name (server / channel / DM)
-                        let contextName = 'Личные сообщения';
-                        if (e.guildId) {
-                            try {
-                                const guildStore = window.Vencord?.Webpack?.Common?.GuildStore
-                                    || window.Vencord?.Webpack?.findByProps?.("getGuild")
-                                    || window.Vencord?.Webpack?.findStore?.("GuildStore");
-                                const chStore = window.Vencord?.Webpack?.Common?.ChannelStore
-                                    || window.Vencord?.Webpack?.findByProps?.("getChannel")
-                                    || window.Vencord?.Webpack?.findStore?.("ChannelStore");
-                                const guild = guildStore?.getGuild?.(e.guildId);
-                                const ch = chStore?.getChannel?.(e.channelId);
-                                if (guild && ch) {
-                                    contextName = `${guild.name} • #${ch.name}`;
-                                } else if (guild) {
-                                    contextName = guild.name;
-                                } else if (ch) {
-                                    contextName = `#${ch.name}`;
-                                }
-                            } catch(err) {
-                                contextName = 'Сервер';
-                            }
-                        } else {
-                            try {
-                                const chStore = window.Vencord?.Webpack?.Common?.ChannelStore
-                                    || window.Vencord?.Webpack?.findByProps?.("getChannel")
-                                    || window.Vencord?.Webpack?.findStore?.("ChannelStore");
-                                const ch = chStore?.getChannel?.(e.channelId);
-                                if (ch && ch.name) {
-                                    contextName = ch.name;
-                                }
-                            } catch(err) {}
-                        }
 
                         // 5. Author name & Avatar
                         const authorName = author.global_name || author.username || 'Пользователь';
@@ -1451,7 +1456,21 @@ body {
                             avatarUrl = `https://cdn.discordapp.com/avatars/${author.id}/${author.avatar}.png?size=128`;
                         }
 
-                        // 6. Message preview
+                        // 6. Title and formatting (matches photo 2)
+                        let titleHtml = escapeHtml(authorName);
+                        let titleText = authorName;
+
+                        const SVG_PING_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" style="vertical-align:middle;margin-right:4px;"><path d="m3 11 18-5v12L3 14v-3z"></path><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"></path></svg>';
+
+                        if (isMentioned || isReplyToMe) {
+                            titleHtml = SVG_PING_ICON + escapeHtml(authorName) + ' <span class="you">(you)</span>';
+                            titleText = authorName + ' (you)';
+                        } else if (isEveryone) {
+                            titleHtml = SVG_PING_ICON + escapeHtml(authorName) + ' <span class="you">(@everyone)</span>';
+                            titleText = authorName + ' (@everyone)';
+                        }
+
+                        // 7. Message preview
                         let bodyText = (msg.content || '').trim();
                         if (!bodyText && msg.attachments && msg.attachments.length > 0) {
                             bodyText = '[Вложение]';
@@ -1462,12 +1481,14 @@ body {
                         }
                         if (!bodyText) bodyText = 'Новое сообщение';
 
-                        // 7. Show Telegram toast!
+                        // 8. Show Desktop Floating Notification & In-App Toast!
                         showTelegramToast({
-                            context: contextName,
-                            author: authorName,
+                            author: titleText,
+                            titleHtml: titleHtml,
                             text: bodyText,
                             avatar: avatarUrl,
+                            guildId: e.guildId || null,
+                            channelId: e.channelId,
                             onClick: () => {
                                 invoke('window_reveal').catch(() => {});
                                 try {
@@ -1483,7 +1504,7 @@ body {
                             }
                         });
 
-                        // 8. Flash taskbar if window is not focused
+                        // 9. Flash taskbar if window is not focused
                         if (!isDocFocused) {
                             invoke('notify_attention').catch(() => {});
                         }

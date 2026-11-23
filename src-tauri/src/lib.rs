@@ -14,6 +14,88 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, Stri
     Ok(update.map(|u| u.version))
 }
 
+#[derive(serde::Deserialize)]
+pub struct ShowNotificationPayload {
+    pub title: String,
+    pub title_html: Option<String>,
+    pub body: String,
+    pub avatar: String,
+    pub guild_id: Option<String>,
+    pub channel_id: String,
+}
+
+#[cfg(target_os = "windows")]
+fn position_notification_window(window: &tauri::WebviewWindow, height: i32) {
+    let (mon_x, mon_y, mon_w, mon_h) = if let Ok(Some(mon)) = window.current_monitor() {
+        let pos = mon.position();
+        let size = mon.size();
+        (pos.x, pos.y, size.width as i32, size.height as i32)
+    } else {
+        (0, 0, 1920, 1080)
+    };
+
+    let width = 360;
+    let x = mon_x + mon_w - width - 16;
+    let y = mon_y + mon_h - height - 52;
+
+    let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+        width: width as u32,
+        height: height as u32,
+    }));
+    let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+}
+
+#[tauri::command]
+fn show_desktop_notification(app: tauri::AppHandle, payload: ShowNotificationPayload) {
+    if let Some(win) = app.get_webview_window("notification_window") {
+        #[cfg(target_os = "windows")]
+        position_notification_window(&win, 74);
+
+        let title_html = payload.title_html.unwrap_or_else(|| payload.title.clone());
+        let payload_json = serde_json::to_string(&serde_json::json!({
+            "title": payload.title,
+            "titleHtml": title_html,
+            "body": payload.body,
+            "avatar": payload.avatar,
+            "guildId": payload.guild_id,
+            "channelId": payload.channel_id,
+        })).unwrap_or_default();
+
+        let _ = win.eval(&format!("window.__RUSTCORD_SHOW_NOTIF__ && window.__RUSTCORD_SHOW_NOTIF__({});", payload_json));
+        let _ = win.show();
+        let _ = win.set_always_on_top(true);
+    }
+}
+
+#[tauri::command]
+fn close_notification_window(app: tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("notification_window") {
+        let _ = win.hide();
+    }
+}
+
+#[tauri::command]
+fn notification_clicked(
+    app: tauri::AppHandle,
+    #[allow(non_snake_case)] guildId: Option<String>,
+    #[allow(non_snake_case)] channelId: Option<String>,
+) {
+    if let Some(notif_win) = app.get_webview_window("notification_window") {
+        let _ = notif_win.hide();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.unminimize();
+        let _ = main.set_focus();
+        let g_arg = guildId.map(|g| format!("'{}'", g)).unwrap_or_else(|| "null".into());
+        let c_arg = channelId.map(|c| format!("'{}'", c)).unwrap_or_else(|| "null".into());
+        let _ = main.eval(&format!(
+            "try {{ const n = window.Vencord?.Webpack?.findByProps?.('selectChannel'); if (n) n.selectChannel({}, {}); }} catch(e) {{}}",
+            g_arg, c_arg
+        ));
+    }
+}
+
 #[tauri::command]
 fn window_reveal(window: tauri::WebviewWindow) {
     let _ = window.show();
@@ -488,6 +570,9 @@ pub fn run() {
             check_for_updates,
             window_reveal,
             notify_attention,
+            show_desktop_notification,
+            close_notification_window,
+            notification_clicked,
             window_minimize,
             window_toggle_maximize,
             window_close,
@@ -533,6 +618,25 @@ pub fn run() {
             .build()?;
 
             info!("[Rustcord] Splashscreen window displayed (300x350).");
+
+            // 3.1. Create Dedicated Transparent Floating Notification Window (Telegram Desktop style)
+            let _notif_window = tauri::WebviewWindowBuilder::new(
+                app,
+                "notification_window",
+                tauri::WebviewUrl::App("notification.html".into()),
+            )
+            .title("Rustcord Notification")
+            .inner_size(360.0, 74.0)
+            .resizable(false)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .shadow(false)
+            .visible(false)
+            .build()?;
+
+            info!("[Rustcord] Notification window prepared.");
 
             // 4. Create Main Discord Webview window (1280x800, min 940x600, frameless, initially hidden)
             let _main_window = tauri::WebviewWindowBuilder::new(
