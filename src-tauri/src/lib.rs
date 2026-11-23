@@ -46,9 +46,228 @@ fn window_is_maximized(window: tauri::WebviewWindow) -> bool {
     window.is_maximized().unwrap_or(false)
 }
 
+#[cfg(target_os = "windows")]
+extern "system" {
+    fn EnumWindows(lp_enum_func: unsafe extern "system" fn(isize, isize) -> i32, l_param: isize) -> i32;
+    fn GetWindowTextW(h_wnd: isize, lp_string: *mut u16, n_max_count: i32) -> i32;
+    fn SetWindowPos(h_wnd: isize, h_wnd_insert_after: isize, x: i32, y: i32, cx: i32, cy: i32, u_flags: u32) -> i32;
+    fn IsWindowVisible(h_wnd: isize) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+fn tile_devtools_side_by_side(main_window: &tauri::WebviewWindow) {
+    let main_hwnd = match main_window.hwnd() {
+        Ok(h) => h.0 as isize,
+        Err(_) => return,
+    };
+
+    let (mon_x, mon_y, mon_w, mon_h) = if let Ok(Some(mon)) = main_window.current_monitor() {
+        let pos = mon.position();
+        let size = mon.size();
+        (pos.x, pos.y, size.width as i32, size.height as i32)
+    } else {
+        (0, 0, 1920, 1080)
+    };
+
+    let discord_width = (mon_w as f64 * 0.65) as i32;
+    let devtools_width = mon_w - discord_width;
+
+    let _ = main_window.unmaximize();
+    let _ = main_window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x: mon_x, y: mon_y }));
+    let _ = main_window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
+        width: discord_width as u32,
+        height: mon_h as u32,
+    }));
+
+    std::thread::spawn(move || {
+        for _ in 0..20 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+
+            struct EnumData {
+                main_hwnd: isize,
+                found_hwnd: isize,
+            }
+
+            unsafe extern "system" fn enum_proc(hwnd: isize, lparam: isize) -> i32 {
+                let data = &mut *(lparam as *mut EnumData);
+                if hwnd == data.main_hwnd {
+                    return 1;
+                }
+                let mut buf = [0u16; 512];
+                let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), 512);
+                if len > 0 {
+                    let title = String::from_utf16_lossy(&buf[..len as usize]);
+                    if title.starts_with("DevTools") && IsWindowVisible(hwnd) != 0 {
+                        data.found_hwnd = hwnd;
+                        return 0;
+                    }
+                }
+                1
+            }
+
+            let mut data = EnumData {
+                main_hwnd,
+                found_hwnd: 0,
+            };
+
+            unsafe {
+                EnumWindows(enum_proc, &mut data as *mut EnumData as isize);
+            }
+
+            if data.found_hwnd != 0 {
+                unsafe {
+                    SetWindowPos(
+                        data.found_hwnd,
+                        0,
+                        mon_x + discord_width,
+                        mon_y,
+                        devtools_width,
+                        mon_h,
+                        0x0040 | 0x0004,
+                    );
+                }
+                break;
+            }
+        }
+    });
+}
+
 #[tauri::command]
 fn open_devtools(window: tauri::WebviewWindow) {
-    window.open_devtools();
+    if window.is_devtools_open() {
+        window.close_devtools();
+        let _ = window.maximize();
+    } else {
+        window.open_devtools();
+        #[cfg(target_os = "windows")]
+        tile_devtools_side_by_side(&window);
+    }
+}
+
+pub struct AppState {
+    default_icon: tauri::image::Image<'static>,
+    speaking_icon: tauri::image::Image<'static>,
+    silent_icon: tauri::image::Image<'static>,
+}
+
+fn generate_speaking_icon() -> tauri::image::Image<'static> {
+    let size = 32usize;
+    let c = 15.5f32;
+    let r = 13.0f32;
+    let mut pixels = Vec::with_capacity(size * size * 4);
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 - c;
+            let dy = y as f32 - c;
+            let d = (dx * dx + dy * dy).sqrt();
+            let a = if d <= r - 0.5 {
+                255u8
+            } else if d >= r + 0.5 {
+                0u8
+            } else {
+                ((r + 0.5 - d) * 255.0) as u8
+            };
+            pixels.extend_from_slice(&[35, 165, 90, a]);
+        }
+    }
+    tauri::image::Image::new_owned(pixels, 32, 32)
+}
+
+fn generate_silent_icon() -> tauri::image::Image<'static> {
+    let size = 32usize;
+    let c = 15.5f32;
+    let r_out = 13.0f32;
+    let r_in = 9.5f32;
+    let mut pixels = Vec::with_capacity(size * size * 4);
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 - c;
+            let dy = y as f32 - c;
+            let d = (dx * dx + dy * dy).sqrt();
+            let a = if d > r_out + 0.5 {
+                0u8
+            } else if d >= r_out - 0.5 {
+                ((r_out + 0.5 - d) * 255.0) as u8
+            } else if d < r_in - 0.5 {
+                25u8
+            } else if d <= r_in + 0.5 {
+                let factor = d - (r_in - 0.5);
+                (25.0 + factor * (255.0 - 25.0)) as u8
+            } else {
+                255u8
+            };
+            pixels.extend_from_slice(&[35, 165, 90, a]);
+        }
+    }
+    tauri::image::Image::new_owned(pixels, 32, 32)
+}
+
+fn build_default_tray_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, tauri::Error> {
+    let open_item = MenuItem::with_id(app, "open", "Открыть Rustcord", true, None::<&str>)?;
+    let mute_item = MenuItem::with_id(app, "toggle_mute", "Микрофон (Mute)", true, None::<&str>)?;
+    let deaf_item = MenuItem::with_id(app, "toggle_deafen", "Звук (Deafen)", true, None::<&str>)?;
+    let game_mode_item = MenuItem::with_id(app, "toggle_game_mode", "Игровой режим", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
+
+    Menu::with_items(
+        app,
+        &[&open_item, &mute_item, &deaf_item, &game_mode_item, &quit_item],
+    )
+}
+
+fn build_call_tray_menu(app: &tauri::AppHandle, channel_name: &str) -> Result<Menu<tauri::Wry>, tauri::Error> {
+    let status_label = format!("В звонке: {}", channel_name);
+    let status_item = MenuItem::with_id(app, "call_status", &status_label, false, None::<&str>)?;
+    let leave_item = MenuItem::with_id(app, "leave_call", "Выйти из звонка", true, None::<&str>)?;
+    let mute_item = MenuItem::with_id(app, "toggle_mute", "Микрофон (Mute)", true, None::<&str>)?;
+    let deaf_item = MenuItem::with_id(app, "toggle_deafen", "Звук (Deafen)", true, None::<&str>)?;
+    let open_item = MenuItem::with_id(app, "open", "Открыть Rustcord", true, None::<&str>)?;
+    let game_mode_item = MenuItem::with_id(app, "toggle_game_mode", "Игровой режим", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
+
+    Menu::with_items(
+        app,
+        &[&status_item, &leave_item, &mute_item, &deaf_item, &open_item, &game_mode_item, &quit_item],
+    )
+}
+
+#[tauri::command]
+fn update_voice_state(
+    app: tauri::AppHandle,
+    #[allow(non_snake_case)] inCall: bool,
+    #[allow(non_snake_case)] isSpeaking: bool,
+    #[allow(non_snake_case)] channelName: Option<String>,
+) {
+    let state = app.state::<AppState>();
+    if let Some(tray) = app.tray_by_id("main_tray") {
+        if inCall {
+            let icon = if isSpeaking {
+                &state.speaking_icon
+            } else {
+                &state.silent_icon
+            };
+            let _ = tray.set_icon(Some(icon.clone()));
+
+            let ch_title = channelName.unwrap_or_else(|| "Активен".into());
+            let status_text = if isSpeaking {
+                format!("Rustcord: В звонке ({}) [Говорит]", ch_title)
+            } else {
+                format!("Rustcord: В звонке ({})", ch_title)
+            };
+            let _ = tray.set_tooltip(Some(&status_text));
+
+            if let Ok(menu) = build_call_tray_menu(&app, &ch_title) {
+                let _ = tray.set_menu(Some(menu));
+            }
+        } else {
+            let _ = tray.set_icon(Some(state.default_icon.clone()));
+            let _ = tray.set_tooltip(Some("Rustcord"));
+
+            if let Ok(menu) = build_default_tray_menu(&app) {
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -260,6 +479,7 @@ pub fn run() {
             window_start_dragging,
             window_is_maximized,
             open_devtools,
+            update_voice_state,
             app_ready,
             native_fetch,
             open_themes_folder,
@@ -340,19 +560,24 @@ pub fn run() {
                 }
             });
 
-            // 6. System Tray Setup (Single persistent tray with debounce on mouse release)
-            let open_item = MenuItem::with_id(app, "open", "Открыть Rustcord", true, None::<&str>)?;
-            let mute_item = MenuItem::with_id(app, "toggle_mute", "Микрофон (Mute)", true, None::<&str>)?;
-            let deaf_item = MenuItem::with_id(app, "toggle_deafen", "Звук (Deafen)", true, None::<&str>)?;
-            let game_mode_item = MenuItem::with_id(app, "toggle_game_mode", "Игровой режим", true, None::<&str>)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
+            // 6. System Tray Setup (Single persistent tray with dynamic call controls & speaking indicator)
+            let default_icon = tauri::image::Image::new_owned(
+                window_icon.rgba().to_vec(),
+                window_icon.width(),
+                window_icon.height(),
+            );
+            let speaking_icon = generate_speaking_icon();
+            let silent_icon = generate_silent_icon();
 
-            let tray_menu = Menu::with_items(
-                app,
-                &[&open_item, &mute_item, &deaf_item, &game_mode_item, &quit_item],
-            )?;
+            app.manage(AppState {
+                default_icon: default_icon.clone(),
+                speaking_icon,
+                silent_icon,
+            });
 
-            let _tray = TrayIconBuilder::new()
+            let tray_menu = build_default_tray_menu(app.handle())?;
+
+            let _tray = TrayIconBuilder::with_id("main_tray")
                 .icon(window_icon)
                 .tooltip("Rustcord")
                 .menu(&tray_menu)
@@ -364,6 +589,9 @@ pub fn run() {
                                 let _ = window.show();
                                 let _ = window.unminimize();
                                 let _ = window.set_focus();
+                            }
+                            "leave_call" => {
+                                let _ = window.eval("window.__RUSTCORD__ && window.__RUSTCORD__.disconnectVoice();");
                             }
                             "toggle_mute" => {
                                 let _ = window.eval("window.__RUSTCORD__ && window.__RUSTCORD__.toggleMute();");

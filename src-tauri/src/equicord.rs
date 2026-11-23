@@ -247,7 +247,7 @@ body {
     left: 0 !important;
     right: 0 !important;
     height: 26px !important;
-    background-color: var(--background-tertiary, var(--bg-base-tertiary, #1e1f22)) !important;
+    background-color: var(--background-tertiary, var(--bg-base-tertiary, #111214)) !important;
     z-index: 2147483647 !important;
     display: flex !important;
     align-items: center !important;
@@ -257,7 +257,9 @@ body {
     box-sizing: border-box !important;
     -webkit-app-region: drag !important;
     user-select: none !important;
-    border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06)) !important;
+    border: none !important;
+    border-bottom: none !important;
+    box-shadow: none !important;
 }
 .rc-tb-left {
     display: flex !important;
@@ -321,6 +323,18 @@ body {
     background-color: #b82e33 !important;
 }
 
+/* Telegram-style borderless rounded notifications, toasts, notices, and popouts */
+[class*="toast_"],
+[class*="notice_"],
+[class*="notification_"],
+[class*="popout_"],
+[class*="tooltip_"],
+#rustcord-toast {
+    border-radius: 12px !important;
+    border: none !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
 /* Hide web-generated or duplicate winButtons */
 [class*="winButtons_"], [class*="winButton_"] {
     display: none !important;
@@ -345,6 +359,8 @@ body {
     const SVG_MAX = '<svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg>';
     const SVG_RESTORE = '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2.5,0.5 H9.5 V7.5 H8.5 V1.5 H2.5 Z M0.5,2.5 H7.5 V9.5 H0.5 Z" fill="none" stroke="currentColor" stroke-width="1"/></svg>';
     const SVG_CLOSE = '<svg width="10" height="10" viewBox="0 0 10 10"><polygon fill="currentColor" points="10 0.7 9.3 0 5 4.3 0.7 0 0 0.7 4.3 5 0 9.3 0.7 10 5 5.7 9.3 10 10 9.3 5.7 5"/></svg>';
+
+    const SVG_DEVTOOLS = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>';
 
     let _isMax = false;
     const updateMaxUi = (isMax) => {
@@ -387,12 +403,19 @@ body {
                 </div>
                 <div class="rc-tb-drag-area"></div>
                 <div class="rc-tb-controls">
+                    <button class="rc-tb-btn rc-devtools" id="rc-tb-btn-devtools" title="DevTools (F12)">${SVG_DEVTOOLS}</button>
                     <button class="rc-tb-btn rc-min" id="rc-tb-btn-min" title="Свернуть">${SVG_MIN}</button>
                     <button class="rc-tb-btn rc-max" id="rc-tb-btn-max" title="Развернуть">${SVG_MAX}</button>
                     <button class="rc-tb-btn rc-close" id="rc-tb-btn-close" title="Закрыть в трей">${SVG_CLOSE}</button>
                 </div>
             `;
             body.appendChild(tb);
+
+            tb.querySelector('#rc-tb-btn-devtools')?.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                invoke('open_devtools');
+            });
 
             tb.querySelector('#rc-tb-btn-min')?.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -874,20 +897,111 @@ body {
             const res = clickPanelButton('deafen');
             this.showToast(res || 'Звук переключен');
         },
+        disconnectVoice() {
+            try {
+                const act = window.Vencord?.Webpack?.findByProps?.("selectVoiceChannel");
+                if (act && typeof act.selectVoiceChannel === 'function') {
+                    act.selectVoiceChannel(null);
+                    this.showToast('Вы вышли из звонка');
+                    return;
+                }
+            } catch(e) {}
+
+            try {
+                const act = window.Vencord?.Webpack?.findByProps?.("disconnect");
+                if (act && typeof act.disconnect === 'function') {
+                    act.disconnect();
+                    this.showToast('Вы вышли из звонка');
+                    return;
+                }
+            } catch(e) {}
+
+            const btn = document.querySelector('button[aria-label="Отключиться"], button[aria-label="Disconnect"], button[aria-label*="Отключ"], section[class*="panels_"] button[aria-label*="Отключ"]');
+            if (btn) {
+                btn.click();
+                this.showToast('Вы вышли из звонка');
+            }
+        },
         showToast(text) {
             let t = document.getElementById('rustcord-toast');
             if (!t) {
                 t = document.createElement('div');
                 t.id = 'rustcord-toast';
-                t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:2147483647;padding:10px 18px;background:#000;border:1px solid #F84800;border-radius:8px;color:#fff;font:600 13px/-apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.95),0 0 12px rgba(248,72,0,.25);transition:opacity .22s;pointer-events:none;display:flex;align-items:center;gap:10px;opacity:0';
+                t.style.cssText = 'position:fixed;bottom:24px;right:24px;z-index:2147483647;padding:10px 18px;background:var(--background-floating, var(--bg-surface-overlay, #111214));border:none;border-radius:12px;color:var(--text-normal, #dbdee1);font:500 13px/-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;box-shadow:0 8px 28px rgba(0,0,0,0.5),0 2px 8px rgba(0,0,0,0.3);transition:opacity 0.2s ease, transform 0.2s ease;pointer-events:none;display:flex;align-items:center;gap:10px;opacity:0;transform:translateY(8px);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);';
                 (document.body||document.documentElement).appendChild(t);
             }
-            t.innerHTML = '<svg width="15" height="15" viewBox="0 0 127.14 96.36" fill="#F84800"><path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.21c2.64-27.38-4.51-51.11-18.9-72.15ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,45.91,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,45.91,96.12,53,91.08,65.69,84.69,65.69Z"/></svg><span>' + text + '</span>';
+            t.innerHTML = '<svg width="15" height="15" viewBox="0 0 127.14 96.36" fill="currentColor"><path d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.21c2.64-27.38-4.51-51.11-18.9-72.15ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,45.91,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,45.91,96.12,53,91.08,65.69,84.69,65.69Z"/></svg><span>' + text + '</span>';
             t.style.opacity = '1';
+            t.style.transform = 'translateY(0)';
             clearTimeout(t._tmr);
-            t._tmr = setTimeout(() => { t.style.opacity = '0'; }, 2500);
+            t._tmr = setTimeout(() => {
+                t.style.opacity = '0';
+                t.style.transform = 'translateY(8px)';
+            }, 2500);
         }
     };
+
+    // 13. Voice State Monitoring & Tray Synchronization (Call presence & speaking state)
+    let _lastInCall = null;
+    let _lastSpeaking = null;
+    let _lastChName = null;
+
+    const checkVoiceState = () => {
+        try {
+            let inCall = false;
+            let isSpeaking = false;
+            let channelName = '';
+
+            try {
+                const chStore = window.Vencord?.Webpack?.findByProps?.("getVoiceChannelId", "getChannel");
+                const vChId = chStore?.getVoiceChannelId ? chStore.getVoiceChannelId() : null;
+                if (vChId) {
+                    inCall = true;
+                    const ch = chStore?.getChannel ? chStore.getChannel(vChId) : null;
+                    if (ch && ch.name) channelName = ch.name;
+                }
+            } catch(e) {}
+
+            if (!inCall) {
+                const callPanel = document.querySelector('section[class*="panels_"] [class*="rtcConnectionStatus_"], section[class*="panels_"] [class*="connection_"], button[aria-label="Отключиться"], button[aria-label="Disconnect"], button[aria-label*="Отключ"]');
+                if (callPanel) {
+                    inCall = true;
+                    const chEl = document.querySelector('section[class*="panels_"] [class*="channel_"], section[class*="panels_"] [class*="title_"]');
+                    if (chEl && chEl.textContent) channelName = chEl.textContent.trim();
+                }
+            }
+
+            if (inCall) {
+                try {
+                    const userStore = window.Vencord?.Webpack?.findByProps?.("getCurrentUser");
+                    const currentUserId = userStore?.getCurrentUser ? userStore.getCurrentUser()?.id : null;
+                    const speakingStore = window.Vencord?.Webpack?.findStore?.("SpeakingStore") 
+                        || window.Vencord?.Webpack?.findByProps?.("isSpeaking");
+                    if (currentUserId && speakingStore?.isSpeaking) {
+                        isSpeaking = !!speakingStore.isSpeaking(currentUserId);
+                    }
+                } catch(e) {}
+
+                if (!isSpeaking) {
+                    const speakingEl = document.querySelector('section[class*="panels_"] [class*="avatarSpeaking_"], [class*="speaking_"][class*="avatar_"], [class*="border_"][style*="rgb(35, 165, 90)"]');
+                    if (speakingEl) isSpeaking = true;
+                }
+            }
+
+            if (inCall !== _lastInCall || isSpeaking !== _lastSpeaking || channelName !== _lastChName) {
+                _lastInCall = inCall;
+                _lastSpeaking = isSpeaking;
+                _lastChName = channelName;
+                invoke('update_voice_state', {
+                    inCall,
+                    isSpeaking,
+                    channelName: channelName || null
+                }).catch(() => {});
+            }
+        } catch(err) {}
+    };
+
+    setInterval(checkVoiceState, 150);
 
     console.log('[Rustcord] Pre-load hooks v4 installed.');
 })();
