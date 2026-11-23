@@ -3,7 +3,7 @@ mod equicord;
 use log::info;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_updater::UpdaterExt;
 
@@ -14,44 +14,64 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, Stri
     Ok(update.map(|u| u.version))
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ShowNotificationPayload {
     pub title: String,
+    #[serde(alias = "title_html")]
     pub title_html: Option<String>,
     pub body: String,
     pub avatar: String,
+    #[serde(alias = "guild_id")]
     pub guild_id: Option<String>,
+    #[serde(alias = "channel_id")]
     pub channel_id: String,
 }
 
 #[cfg(target_os = "windows")]
-fn position_notification_window(window: &tauri::WebviewWindow, height: i32) {
-    let (mon_x, mon_y, mon_w, mon_h) = if let Ok(Some(mon)) = window.current_monitor() {
-        let pos = mon.position();
-        let size = mon.size();
-        (pos.x, pos.y, size.width as i32, size.height as i32)
-    } else {
-        (0, 0, 1920, 1080)
-    };
+#[repr(C)]
+struct RECT {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
 
-    let width = 360;
-    let x = mon_x + mon_w - width - 16;
-    let y = mon_y + mon_h - height - 52;
+#[cfg(target_os = "windows")]
+fn position_and_show_notification(win: &tauri::WebviewWindow) {
+    if let Ok(hwnd) = win.hwnd() {
+        let hwnd = hwnd.0 as isize;
+        let mut work_area = RECT { left: 0, top: 0, right: 1920, bottom: 1040 };
+        unsafe {
+            SystemParametersInfoW(48, 0, &mut work_area as *mut RECT, 0); // SPI_GETWORKAREA = 48
+        }
 
-    let _ = window.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-        width: width as u32,
-        height: height as u32,
-    }));
-    let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+        let scale = win.current_monitor().ok().flatten().map(|m| m.scale_factor()).unwrap_or(1.0);
+        let phys_w = (350.0 * scale) as i32;
+        let phys_h = (68.0 * scale) as i32;
+        let margin = (12.0 * scale) as i32;
+
+        let x = work_area.right - phys_w - margin;
+        let y = work_area.bottom - phys_h - margin;
+
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                -1, // HWND_TOPMOST
+                x,
+                y,
+                phys_w,
+                phys_h,
+                0x0040 | 0x0010, // SWP_SHOWWINDOW | SWP_NOACTIVATE
+            );
+        }
+    }
 }
 
 #[tauri::command]
 fn show_desktop_notification(app: tauri::AppHandle, payload: ShowNotificationPayload) {
     if let Some(win) = app.get_webview_window("notification_window") {
-        #[cfg(target_os = "windows")]
-        position_notification_window(&win, 74);
-
-        let title_html = payload.title_html.unwrap_or_else(|| payload.title.clone());
+        let title_html = payload.title_html.clone().unwrap_or_else(|| payload.title.clone());
         let payload_json = serde_json::to_string(&serde_json::json!({
             "title": payload.title,
             "titleHtml": title_html,
@@ -62,6 +82,11 @@ fn show_desktop_notification(app: tauri::AppHandle, payload: ShowNotificationPay
         })).unwrap_or_default();
 
         let _ = win.eval(&format!("window.__RUSTCORD_SHOW_NOTIF__ && window.__RUSTCORD_SHOW_NOTIF__({});", payload_json));
+        let _ = win.emit("show_notification", &payload);
+
+        #[cfg(target_os = "windows")]
+        position_and_show_notification(&win);
+
         let _ = win.show();
         let _ = win.set_always_on_top(true);
     }
@@ -147,6 +172,7 @@ extern "system" {
     fn GetWindowTextW(h_wnd: isize, lp_string: *mut u16, n_max_count: i32) -> i32;
     fn SetWindowPos(h_wnd: isize, h_wnd_insert_after: isize, x: i32, y: i32, cx: i32, cy: i32, u_flags: u32) -> i32;
     fn IsWindowVisible(h_wnd: isize) -> i32;
+    fn SystemParametersInfoW(ui_action: u32, ui_param: u32, pv_param: *mut RECT, f_win_ini: u32) -> i32;
 }
 
 #[cfg(target_os = "windows")]
