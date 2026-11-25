@@ -232,7 +232,7 @@ pub fn build_initialization_script(equicord_js: &str, equicord_css: &str) -> Str
         try {
             playTelegramChime();
 
-            // 1. Invoke Desktop Floating Notification Window (visible outside app on screen over games/browser/desktop)
+            // Invoke Desktop Floating Notification Window (always on top of all windows, Telegram Desktop style)
             invoke('show_desktop_notification', {
                 payload: {
                     title: opts.author || 'Discord',
@@ -243,90 +243,6 @@ pub fn build_initialization_script(equicord_js: &str, equicord_css: &str) -> Str
                     channelId: opts.channelId || ''
                 }
             }).catch(() => {});
-
-            // 2. Render In-App Toast inside Discord
-            let container = document.getElementById('rustcord-notifications-container');
-            if (!container) {
-                container = document.createElement('div');
-                container.id = 'rustcord-notifications-container';
-                (document.body || document.documentElement).appendChild(container);
-            }
-
-            while (container.children.length >= 4) {
-                const oldest = container.lastElementChild;
-                if (oldest) oldest.remove();
-            }
-
-            const toast = document.createElement('div');
-            toast.className = 'rc-tg-toast';
-
-            const authorText = opts.author || 'Discord';
-            const titleHtml = opts.titleHtml || escapeHtml(authorText);
-            const msgText = opts.text || '';
-            const avatarUrl = opts.avatar || 'https://cdn.discordapp.com/embed/avatars/0.png';
-
-            toast.innerHTML = `
-                <img class="rc-tg-avatar" src="${escapeHtml(avatarUrl)}" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'" alt="" />
-                <div class="rc-tg-body-col">
-                    <div class="rc-tg-top-row">
-                        <span class="rc-tg-title">${titleHtml}</span>
-                        <button class="rc-tg-close-btn" title="Закрыть">
-                            <svg width="10" height="10" viewBox="0 0 10 10">
-                                <polygon fill="currentColor" points="10 0.7 9.3 0 5 4.3 0.7 0 0 0.7 4.3 5 0 9.3 0.7 10 5 5.7 9.3 10 10 9.3 5.7 5"/>
-                            </svg>
-                        </button>
-                    </div>
-                    <div class="rc-tg-text">${escapeHtml(msgText)}</div>
-                </div>
-            `;
-
-            let isDismissed = false;
-            let autoDismissTimer = null;
-
-            const dismiss = () => {
-                if (isDismissed) return;
-                isDismissed = true;
-                clearTimeout(autoDismissTimer);
-                toast.classList.remove('rc-tg-visible');
-                setTimeout(() => {
-                    if (toast.parentNode) toast.parentNode.removeChild(toast);
-                }, 250);
-            };
-
-            const startDismissTimer = (ms = 6500) => {
-                clearTimeout(autoDismissTimer);
-                autoDismissTimer = setTimeout(dismiss, ms);
-            };
-
-            const closeBtn = toast.querySelector('.rc-tg-close-btn');
-            if (closeBtn) {
-                closeBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    dismiss();
-                    if (typeof opts.onClose === 'function') opts.onClose();
-                });
-            }
-
-            toast.addEventListener('click', () => {
-                dismiss();
-                if (typeof opts.onClick === 'function') {
-                    opts.onClick();
-                } else {
-                    invoke('window_reveal').catch(() => {});
-                }
-            });
-
-            toast.addEventListener('mouseenter', () => clearTimeout(autoDismissTimer));
-            toast.addEventListener('mouseleave', () => startDismissTimer(3000));
-
-            container.insertBefore(toast, container.firstChild);
-            requestAnimationFrame(() => {
-                requestAnimationFrame(() => {
-                    toast.classList.add('rc-tg-visible');
-                });
-            });
-            startDismissTimer(6500);
         } catch(err) {
             console.warn('[Rustcord] showTelegramToast error:', err);
         }
