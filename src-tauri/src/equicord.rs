@@ -125,6 +125,61 @@ pub fn build_initialization_script(equicord_js: &str, equicord_css: &str) -> Str
         }
     });
 
+    // 2.1. External links & downloads handler -> open in default system browser
+    const isExternalOrDownloadUrl = (rawUrl) => {
+        if (!rawUrl || typeof rawUrl !== 'string') return false;
+        if (rawUrl.startsWith('mailto:')) return true;
+        if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) return false;
+        try {
+            const u = new URL(rawUrl);
+            const h = u.hostname.toLowerCase();
+            if (h === 'cdn.discordapp.com' || h === 'media.discordapp.net' || h === 'dl.discordapp.net') {
+                return true;
+            }
+            if (h === 'discord.com' || h.endsWith('.discord.com') || h === 'discordapp.com' || h.endsWith('.discordapp.com')) {
+                return false;
+            }
+            return true;
+        } catch(e) {
+            return false;
+        }
+    };
+
+    const _origWindowOpen = window.open;
+    window.open = function(url, target, features) {
+        if (typeof url === 'string' && url !== 'about:blank') {
+            try {
+                const u = new URL(url, window.location.href);
+                if (u.hostname.toLowerCase().endsWith('discord.com') && u.pathname.startsWith('/popout')) {
+                    return _origWindowOpen.apply(this, arguments);
+                }
+            } catch(e) {}
+            if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('mailto:')) {
+                invoke('open_external', { url }).catch(() => {});
+                return null;
+            }
+        }
+        return _origWindowOpen.apply(this, arguments);
+    };
+
+    document.addEventListener('click', (e) => {
+        if (e.defaultPrevented) return;
+        const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+        if (!a) return;
+        const href = a.href;
+        if (!href) return;
+        if (a.hasAttribute('download') || a.target === '_blank' || isExternalOrDownloadUrl(href)) {
+            if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:')) {
+                try {
+                    const u = new URL(href);
+                    if (u.hostname.toLowerCase().endsWith('discord.com') && u.pathname.startsWith('/popout')) return;
+                } catch(err) {}
+                e.preventDefault();
+                invoke('open_external', { url: href }).catch(() => {});
+            }
+        }
+    }, false);
+
     // === [Rustcord Telegram-Style Notification Engine & Polyfill] ===
     const recentlySeenMsgIds = new Set();
 

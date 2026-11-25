@@ -183,6 +183,87 @@ extern "system" {
 }
 
 #[cfg(target_os = "windows")]
+#[link(name = "shell32")]
+extern "system" {
+    fn ShellExecuteW(
+        hwnd: isize,
+        lp_operation: *const u16,
+        lp_file: *const u16,
+        lp_parameters: *const u16,
+        lp_directory: *const u16,
+        n_show_cmd: i32,
+    ) -> isize;
+}
+
+fn open_in_default_browser(url: &str) {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://") || trimmed.starts_with("mailto:")) {
+        return;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let op: Vec<u16> = std::ffi::OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let file: Vec<u16> = std::ffi::OsStr::new(trimmed)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            ShellExecuteW(0, op.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), 1);
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        let _ = std::process::Command::new("open").arg(trimmed).spawn();
+        #[cfg(target_os = "linux")]
+        let _ = std::process::Command::new("xdg-open").arg(trimmed).spawn();
+    }
+}
+
+fn is_internal_discord_url(url: &tauri::Url) -> bool {
+    let scheme = url.scheme();
+    if scheme == "about" || scheme == "blob" || scheme == "data" {
+        return true;
+    }
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+
+    // Media / attachment CDN links should open in the external browser for viewing or downloading
+    if host == "cdn.discordapp.com" || host == "media.discordapp.net" || host == "dl.discordapp.net" {
+        return false;
+    }
+
+    host == "discord.com"
+        || host.ends_with(".discord.com")
+        || host == "discordapp.com"
+        || host.ends_with(".discordapp.com")
+        || host == "accounts.google.com"
+        || host == "appleid.apple.com"
+        || host == "hcaptcha.com"
+        || host.ends_with(".hcaptcha.com")
+        || host == "challenges.cloudflare.com"
+        || host == "recaptcha.net"
+        || host == "www.google.com"
+}
+
+#[tauri::command]
+fn open_external(url: String) {
+    open_in_default_browser(&url);
+}
+
+#[cfg(target_os = "windows")]
 fn tile_devtools_side_by_side(main_window: &tauri::WebviewWindow) {
     let main_hwnd = match main_window.hwnd() {
         Ok(h) => h.0 as isize,
@@ -616,7 +697,8 @@ pub fn run() {
             app_ready,
             native_fetch,
             open_themes_folder,
-            get_local_themes
+            get_local_themes,
+            open_external
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -687,6 +769,33 @@ pub fn run() {
             .shadow(true)
             .visible(false)
             .disable_drag_drop_handler()
+            .on_new_window(|url, _features| {
+                let raw = url.as_str();
+                if raw == "about:blank" {
+                    return tauri::webview::NewWindowResponse::Allow;
+                }
+                if let Some(host) = url.host_str() {
+                    if host.ends_with("discord.com") && url.path().starts_with("/popout") {
+                        return tauri::webview::NewWindowResponse::Allow;
+                    }
+                }
+                open_in_default_browser(raw);
+                tauri::webview::NewWindowResponse::Deny
+            })
+            .on_navigation(|url| {
+                if is_internal_discord_url(&url) {
+                    true
+                } else {
+                    open_in_default_browser(url.as_str());
+                    false
+                }
+            })
+            .on_download(|_webview, event| {
+                if let tauri::webview::DownloadEvent::Requested { url, .. } = event {
+                    open_in_default_browser(url.as_str());
+                }
+                false
+            })
             .initialization_script(&init_script)
             .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
             .build()?;
