@@ -14,120 +14,6 @@ async fn check_for_updates(app: tauri::AppHandle) -> Result<Option<String>, Stri
     Ok(update.map(|u| u.version))
 }
 
-#[cfg(target_os = "windows")]
-#[repr(C)]
-struct RECT {
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-}
-
-#[cfg(target_os = "windows")]
-fn position_and_show_notification(win: &tauri::WebviewWindow) {
-    let _ = win.show();
-    let _ = win.unminimize();
-    let _ = win.set_always_on_top(true);
-
-    if let Ok(hwnd) = win.hwnd() {
-        let hwnd = hwnd.0 as isize;
-        let mut work_area = RECT { left: 0, top: 0, right: 1920, bottom: 1040 };
-        unsafe {
-            SystemParametersInfoW(48, 0, &mut work_area as *mut RECT, 0); // SPI_GETWORKAREA = 48
-        }
-
-        if work_area.right <= 0 || work_area.bottom <= 0 {
-            work_area.right = 1920;
-            work_area.bottom = 1040;
-        }
-
-        let width = 360;
-        let height = 76;
-        let margin = 14;
-
-        let x = work_area.right - width - margin;
-        let y = work_area.bottom - height - margin;
-
-        unsafe {
-            SetWindowPos(
-                hwnd,
-                -1, // HWND_TOPMOST
-                x,
-                y,
-                width,
-                height,
-                0x0040 | 0x0010, // SWP_SHOWWINDOW | SWP_NOACTIVATE
-            );
-        }
-    }
-}
-
-#[tauri::command]
-fn show_desktop_notification(app: tauri::AppHandle, payload: Option<serde_json::Value>) {
-    if let Some(win) = app.get_webview_window("notification_window") {
-        let data = payload.unwrap_or_default();
-        let title = data.get("title").and_then(|v| v.as_str()).unwrap_or("Discord").to_string();
-        let title_html = data.get("titleHtml")
-            .or_else(|| data.get("title_html"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(&title)
-            .to_string();
-        let body = data.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let avatar = data.get("avatar").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let guild_id = data.get("guildId").or_else(|| data.get("guild_id")).and_then(|v| v.as_str()).map(|s| s.to_string());
-        let channel_id = data.get("channelId").or_else(|| data.get("channel_id")).and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-        let payload_json = serde_json::to_string(&serde_json::json!({
-            "title": title,
-            "titleHtml": title_html,
-            "body": body,
-            "avatar": avatar,
-            "guildId": guild_id,
-            "channelId": channel_id,
-        })).unwrap_or_default();
-
-        let _ = win.eval(&format!(
-            "window.__PENDING_NOTIF__ = {0}; if (window.__RUSTCORD_SHOW_NOTIF__) window.__RUSTCORD_SHOW_NOTIF__({0});",
-            payload_json
-        ));
-
-        #[cfg(target_os = "windows")]
-        position_and_show_notification(&win);
-
-        let _ = win.show();
-        let _ = win.set_always_on_top(true);
-    }
-}
-
-#[tauri::command]
-fn close_notification_window(app: tauri::AppHandle) {
-    if let Some(win) = app.get_webview_window("notification_window") {
-        let _ = win.hide();
-    }
-}
-
-#[tauri::command]
-fn notification_clicked(
-    app: tauri::AppHandle,
-    #[allow(non_snake_case)] guildId: Option<String>,
-    #[allow(non_snake_case)] channelId: Option<String>,
-) {
-    if let Some(notif_win) = app.get_webview_window("notification_window") {
-        let _ = notif_win.hide();
-    }
-    if let Some(main) = app.get_webview_window("main") {
-        let _ = main.show();
-        let _ = main.unminimize();
-        let _ = main.set_focus();
-        let g_arg = guildId.map(|g| format!("'{}'", g)).unwrap_or_else(|| "null".into());
-        let c_arg = channelId.map(|c| format!("'{}'", c)).unwrap_or_else(|| "null".into());
-        let _ = main.eval(&format!(
-            "try {{ const n = window.Vencord?.Webpack?.findByProps?.('selectChannel'); if (n) n.selectChannel({}, {}); }} catch(e) {{}}",
-            g_arg, c_arg
-        ));
-    }
-}
-
 #[tauri::command]
 fn window_reveal(window: tauri::WebviewWindow) {
     let _ = window.show();
@@ -179,7 +65,6 @@ extern "system" {
     fn GetWindowTextW(h_wnd: isize, lp_string: *mut u16, n_max_count: i32) -> i32;
     fn SetWindowPos(h_wnd: isize, h_wnd_insert_after: isize, x: i32, y: i32, cx: i32, cy: i32, u_flags: u32) -> i32;
     fn IsWindowVisible(h_wnd: isize) -> i32;
-    fn SystemParametersInfoW(ui_action: u32, ui_param: u32, pv_param: *mut RECT, f_win_ini: u32) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -684,9 +569,6 @@ pub fn run() {
             check_for_updates,
             window_reveal,
             notify_attention,
-            show_desktop_notification,
-            close_notification_window,
-            notification_clicked,
             window_minimize,
             window_toggle_maximize,
             window_close,
@@ -733,25 +615,6 @@ pub fn run() {
             .build()?;
 
             info!("[Rustcord] Splashscreen window displayed (300x350).");
-
-            // 3.1. Create Dedicated Transparent Floating Notification Window (Telegram Desktop style)
-            let _notif_window = tauri::WebviewWindowBuilder::new(
-                app,
-                "notification_window",
-                tauri::WebviewUrl::App("notification.html".into()),
-            )
-            .title("Rustcord Notification")
-            .inner_size(360.0, 74.0)
-            .resizable(false)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .shadow(false)
-            .visible(false)
-            .build()?;
-
-            info!("[Rustcord] Notification window prepared.");
 
             // 4. Create Main Discord Webview window (1280x800, min 940x600, frameless, initially hidden)
             let _main_window = tauri::WebviewWindowBuilder::new(
