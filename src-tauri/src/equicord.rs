@@ -99,6 +99,14 @@ pub fn build_initialization_script(equicord_js: &str, equicord_css: &str) -> Str
 // === [Rustcord Core Injection Layer v4] ===
 (function() {
     'use strict';
+    // NEVER run Rustcord/Equicord injection inside iframes (e.g. hCaptcha, Turnstile, reCAPTCHA) or non-Discord hosts!
+    if (window.self !== window.top) {
+        return;
+    }
+    const _rcHost = (window.location && window.location.hostname || '').toLowerCase();
+    if (!_rcHost || (_rcHost !== 'discord.com' && !_rcHost.endsWith('.discord.com') && _rcHost !== 'discordapp.com' && !_rcHost.endsWith('.discordapp.com'))) {
+        return;
+    }
     console.log('[Rustcord] Initializing pre-load hooks v4...');
 
     // 1. Safe invoke helper

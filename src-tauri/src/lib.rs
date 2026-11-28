@@ -138,8 +138,16 @@ fn is_internal_discord_url(url: &tauri::Url) -> bool {
         || host == "appleid.apple.com"
         || host == "hcaptcha.com"
         || host.ends_with(".hcaptcha.com")
-        || host == "challenges.cloudflare.com"
+        || host == "cloudflare.com"
+        || host.ends_with(".cloudflare.com")
         || host == "recaptcha.net"
+        || host.ends_with(".recaptcha.net")
+        || host == "gstatic.com"
+        || host.ends_with(".gstatic.com")
+        || host == "arkoselabs.com"
+        || host.ends_with(".arkoselabs.com")
+        || host == "funcaptcha.com"
+        || host.ends_with(".funcaptcha.com")
         || host == "www.google.com"
 }
 
